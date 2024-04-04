@@ -17,7 +17,7 @@ $(OBJDIR)/%.o: $(SRCDIR)/%.c
 all: $(NAME)
 
 run: all
-	@./$(NAME)
+	@./$(NAME) google.com
 
 $(NAME): $(OBJDIR) $(OBJ)
 	$(CC) $(OBJ) -o $(NAME)
