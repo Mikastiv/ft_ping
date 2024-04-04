@@ -1,6 +1,5 @@
 #include <arpa/inet.h>
 #include <ctype.h>
-#include <errno.h>
 #include <netdb.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -9,16 +8,18 @@
 #include <string.h>
 #include <unistd.h>
 
+#define IPSIZE 16
+
 static const char* progname;
 
 typedef struct {
     const char* dst;
-    char ip[32];
+    char ip[IPSIZE];
     char host[NI_MAXHOST];
     struct sockaddr_in addr;
 } PingData;
 
-void
+static void
 print_error(const char* restrict fmt, ...) {
     va_list args;
     va_start(args, fmt);
@@ -26,12 +27,12 @@ print_error(const char* restrict fmt, ...) {
     va_end(args);
 }
 
-void
-usage() {
+static void
+usage(void) {
     print_error("usage: %s [options] <destination>\n", progname);
 }
 
-bool
+static bool
 is_ipv4(const char* str) {
     size_t dots = 0;
     for (size_t i = 0; str[i]; i++) {
@@ -50,55 +51,37 @@ is_ipv4(const char* str) {
     return true;
 }
 
-struct sockaddr_in
+static struct sockaddr_in
 lookup_addr(const char* dst) {
-    struct sockaddr_in out;
+    struct addrinfo hints = {
+        .ai_family = AF_INET,
+        .ai_socktype = SOCK_RAW,
+        .ai_protocol = IPPROTO_ICMP,
+    };
+    struct addrinfo* result = NULL;
 
-    if (is_ipv4(dst)) {
-        switch (inet_pton(AF_INET, dst, &out.sin_addr.s_addr)) {
-            case 0: {
-                print_error("not in presentation format\n");
-                exit(EXIT_FAILURE);
-                break;
-            }
-            case -1: {
-                const char* err = strerror(errno);
-                print_error("%s: %s\n", progname, err);
-                exit(EXIT_FAILURE);
-                break;
-            }
-            default:
-                break;
-        }
-    } else {
-        struct addrinfo hints = {
-            .ai_family = AF_INET,
-            .ai_socktype = SOCK_RAW,
-            .ai_protocol = IPPROTO_ICMP,
-        };
-        struct addrinfo* result = NULL;
-
-        const int res = getaddrinfo(dst, NULL, &hints, &result);
-        if (res != 0) {
-            const char* err = gai_strerror(res);
-            print_error("%s: %s\n", progname, err);
-            exit(EXIT_FAILURE);
-        }
-
-        out = *(struct sockaddr_in*)result->ai_addr;
-        freeaddrinfo(result);
+    const int res = getaddrinfo(dst, NULL, &hints, &result);
+    if (res != 0) {
+        const char* err = gai_strerror(res);
+        print_error("%s: %s: %s\n", progname, dst, err);
+        exit(EXIT_FAILURE);
     }
+
+    struct sockaddr_in out = *(struct sockaddr_in*)result->ai_addr;
+    freeaddrinfo(result);
 
     return out;
 }
 
-void
-lookup_hostname(struct sockaddr_in addr, char* buffer, const size_t buffer_size) {
+static void
+lookup_hostname(PingData* ping) {
     const size_t addrlen = sizeof(struct sockaddr_in);
-    const int res = getnameinfo((struct sockaddr*)&addr, addrlen, buffer, buffer_size, NULL, 0, NI_NAMEREQD);
+    const int res =
+        getnameinfo((struct sockaddr*)&ping->addr, addrlen, ping->host, sizeof(ping->host), NULL, 0, NI_NAMEREQD);
     if (res != 0) {
+        if (res == EAI_NONAME) return;
         const char* err = gai_strerror(res);
-        print_error("%s: %s\n", progname, err);
+        print_error("%s: %s: %s\n", progname, ping->dst, err);
         exit(EXIT_FAILURE);
     }
 }
@@ -116,9 +99,10 @@ main(int argc, char* const* argv) {
     };
 
     ping.addr = lookup_addr(ping.dst);
-    lookup_hostname(ping.addr, ping.host, sizeof(ping.host));
+    if (!is_ipv4(ping.dst)) {
+        lookup_hostname(&ping);
+    }
     inet_ntop(AF_INET, &ping.addr.sin_addr.s_addr, ping.ip, INET_ADDRSTRLEN);
 
-    printf("host: %s\n", ping.host);
-    printf("ip: %s\n", ping.ip);
+    printf("PING %s (%s)\n", ping.dst, ping.ip);
 }

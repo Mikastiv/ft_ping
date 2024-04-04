@@ -1,7 +1,7 @@
 NAME = ft_ping
 
 CC = clang
-CFLAGS = -Wall -Wextra -Werror -Wpedantic -Wshadow
+CFLAGS = -Wall -Wextra -Werror -Wpedantic -Wshadow -fno-strict-aliasing
 
 SRCDIR = src
 OBJDIR = obj
