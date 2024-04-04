@@ -43,7 +43,7 @@ main(int argc, char* const* argv) {
 
     int res = getaddrinfo(argv[1], NULL, &hints, &result);
     if (res != 0) {
-        const char* err = strerror(res);
+        const char* err = gai_strerror(res);
         print_error("%s: %s\n", progname, err);
         exit(EXIT_FAILURE);
     }
@@ -52,7 +52,11 @@ main(int argc, char* const* argv) {
 
     res = getnameinfo(result->ai_addr, sizeof(struct sockaddr_in), host, sizeof(host), NULL, 0, NI_NAMEREQD);
 
+    struct sockaddr_in addr = *(struct sockaddr_in*)result->ai_addr;
+    char ip[NI_MAXSERV];
+    const char* ip_presentable = inet_ntop(AF_INET, &addr.sin_addr.s_addr, ip, INET_ADDRSTRLEN);
     printf("host: %s\n", host);
+    printf("ip: %s\n", ip_presentable);
 
     switch (inet_pton(AF_INET, argv[1], &dst.sin_addr.s_addr)) {
         case 0: {
