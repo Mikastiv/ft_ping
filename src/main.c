@@ -1,5 +1,5 @@
-#include "types.h"
 #include "icmp.h"
+#include "types.h"
 
 #include <arpa/inet.h>
 #include <ctype.h>
@@ -18,6 +18,8 @@
 #define IPSIZE 16
 #define PKTSIZE 64
 
+static const int ttl = 64;
+static const struct timeval timeout = { .tv_sec = 1 };
 static const char* progname = NULL;
 
 static volatile sig_atomic_t pingloop = 1;
@@ -30,7 +32,7 @@ int_handler(int signal) {
 
 typedef struct {
     IcmpEchoHeader header;
-    char msg[PKTSIZE - sizeof(IcmpEchoHeader)];
+    u8 msg[PKTSIZE - sizeof(IcmpEchoHeader)];
 } Packet;
 
 typedef struct {
@@ -115,6 +117,19 @@ lookup_hostname(PingData* ping) {
     }
 }
 
+static void
+send_ping(PingData* ping) {
+    Packet pckt;
+
+    if (setsockopt(ping->fd, IPPROTO_IP, IP_TTL, &ttl, sizeof(ttl)) != 0) {
+        const char* err = strerror(errno);
+        print_error("%s: %s\n", progname, err);
+        exit(EXIT_FAILURE);
+    }
+
+    setsockopt(ping->fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+}
+
 int
 main(int argc, char* const* argv) {
     progname = argc > 0 ? argv[0] : "ft_ping";
@@ -154,6 +169,8 @@ main(int argc, char* const* argv) {
     signal(SIGINT, int_handler);
 
     printf("PING %s (%s)\n", ping.dst, ping.ip);
+
+    send_ping(&ping);
 
     close(ping.fd);
 }
