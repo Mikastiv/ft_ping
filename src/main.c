@@ -17,7 +17,6 @@
 #define IPSIZE 16
 #define PKTSIZE 64
 
-static bool is_root = false;
 static const char* progname = NULL;
 
 static volatile sig_atomic_t pingloop = 1;
@@ -123,7 +122,7 @@ main(int argc, char* const* argv) {
         exit(EXIT_FAILURE);
     }
 
-    is_root = getuid() == 0;
+    const bool is_root = getuid() == 0;
 
     PingData ping = {
         .dst = argv[argc - 1],
