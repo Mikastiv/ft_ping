@@ -1,10 +1,11 @@
+#include "types.h"
+#include "icmp.h"
+
 #include <arpa/inet.h>
-#include <asm-generic/errno-base.h>
 #include <ctype.h>
 #include <errno.h>
 #include <netdb.h>
 #include <netinet/in.h>
-#include <netinet/ip_icmp.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -28,15 +29,15 @@ int_handler(int signal) {
 }
 
 typedef struct {
-    struct icmphdr header;
-    char msg[PKTSIZE - sizeof(struct icmphdr)];
+    IcmpEchoHeader header;
+    char msg[PKTSIZE - sizeof(IcmpEchoHeader)];
 } Packet;
 
 typedef struct {
-    int fd;
+    i32 fd;
     const char* dst;
-    char ip[IPSIZE];
-    char host[NI_MAXHOST];
+    u8 ip[IPSIZE];
+    u8 host[NI_MAXHOST];
     struct sockaddr_in addr;
 } PingData;
 
@@ -55,8 +56,8 @@ usage(void) {
 
 static bool
 is_ipv4(const char* str) {
-    size_t dots = 0;
-    for (size_t i = 0; str[i]; i++) {
+    u32 dots = 0;
+    for (u32 i = 0; str[i]; i++) {
         if (!isdigit(str[i]) && str[i] != '.') {
             return false;
         }
@@ -81,7 +82,7 @@ lookup_addr(const char* dst) {
     };
     struct addrinfo* result = NULL;
 
-    const int res = getaddrinfo(dst, NULL, &hints, &result);
+    const i32 res = getaddrinfo(dst, NULL, &hints, &result);
     if (res != 0) {
         const char* err = gai_strerror(res);
         print_error("%s: %s: %s\n", progname, dst, err);
@@ -100,7 +101,7 @@ lookup_hostname(PingData* ping) {
     const int res = getnameinfo(
         (struct sockaddr*)&ping->addr,
         addrlen,
-        ping->host,
+        (char*)ping->host,
         sizeof(ping->host),
         NULL,
         0,
@@ -129,7 +130,7 @@ main(int argc, char* const* argv) {
     };
 
     ping.addr = lookup_addr(ping.dst);
-    inet_ntop(AF_INET, &ping.addr.sin_addr.s_addr, ping.ip, INET_ADDRSTRLEN);
+    inet_ntop(AF_INET, &ping.addr.sin_addr.s_addr, (char*)ping.ip, INET_ADDRSTRLEN);
     if (!is_ipv4(ping.dst)) {
         lookup_hostname(&ping);
     }
