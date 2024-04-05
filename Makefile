@@ -28,7 +28,7 @@ $(OBJDIR):
 debug: CFLAGS += -g
 debug: all
 
-release: CFLAGS += -flto -O3
+release: CFLAGS += -O3 -DNDEBUG
 release: all
 
 fmt:
