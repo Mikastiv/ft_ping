@@ -5,8 +5,10 @@
 #include <bits/types/struct_iovec.h>
 #include <ctype.h>
 #include <errno.h>
+#include <math.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <netinet/ip.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -139,6 +141,26 @@ checksum(const void* data, u64 len) {
     return ~sum;
 }
 
+static bool
+decode_msg(const u8* buffer, const u64 buffer_size, Packet* out) {
+    const struct ip* ip_header = (struct ip*)buffer;
+    const u64 header_size = ip_header->ip_hl << 2;
+    if (buffer_size < header_size + PKTSIZE) {
+        return false;
+    }
+
+    Packet* pkt = (Packet*)(buffer + header_size);
+    *out = *pkt;
+
+    const u16 cksum = pkt->header.cksum;
+    pkt->header.cksum = 0;
+    pkt->header.cksum = checksum(pkt, sizeof(*pkt));
+    if (cksum != pkt->header.cksum) {
+        return false;
+    }
+    return true;
+}
+
 static void
 send_ping(PingData* ping) {
 
@@ -206,7 +228,13 @@ send_ping(PingData* ping) {
             exit(EXIT_FAILURE);
         }
 
-        printf("received packet: %ld\n", bytes);
+        Packet r_pkt;
+        if (!decode_msg(buffer, sizeof(buffer), &r_pkt)) {
+            printf("invalid packet\n");
+            continue;
+        }
+
+        printf("received packet: %d\n", ntohs(r_pkt.header.seq));
     }
 }
 
