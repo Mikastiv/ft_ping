@@ -2,6 +2,7 @@
 #include "types.h"
 
 #include <arpa/inet.h>
+#include <bits/types/struct_iovec.h>
 #include <ctype.h>
 #include <errno.h>
 #include <netdb.h>
@@ -20,7 +21,7 @@
 #define PKTSIZE 64
 
 static const int ttl = 64;
-static const struct timeval timeout = { .tv_sec = 1 };
+static const struct timeval timeout = { .tv_sec = 2 };
 static const char* progname = NULL;
 
 static volatile sig_atomic_t pingloop = 1;
@@ -161,10 +162,44 @@ send_ping(PingData* ping) {
         pkt.msg[i] = i + '0';
     }
 
-    u32 msg_count = 0;
+    u16 msg_count = 0;
     while (pingloop) {
-        pkt.header.seq = msg_count++;
+        pkt.header.seq = htons(msg_count++);
         pkt.header.cksum = checksum(&pkt, sizeof(pkt));
+
+        const i64 res = sendto(
+            ping->fd,
+            &pkt,
+            sizeof(pkt),
+            0,
+            (struct sockaddr*)&ping->addr,
+            sizeof(struct sockaddr)
+        );
+
+        if (res < 0) {
+            const char* err = strerror(errno);
+            print_error("%s: %s\n", progname, err);
+            exit(EXIT_FAILURE);
+        }
+
+        usleep(1000 * 10);
+
+        struct iovec iov;
+        struct msghdr rmsg = {
+            .msg_name = &ping->addr,
+            .msg_namelen = sizeof(ping->addr),
+            .msg_iov = &iov,
+            .msg_iovlen = 1,
+        };
+        const i64 bytes = recvmsg(ping->fd, &rmsg, 0);
+
+        if (bytes < 0) {
+            const char* err = strerror(errno);
+            print_error("%s: %s\n", progname, err);
+            exit(EXIT_FAILURE);
+        }
+
+        printf("received packet\n");
     }
 }
 
