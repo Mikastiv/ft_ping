@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 
 #define IPSIZE 16
@@ -117,9 +118,29 @@ lookup_hostname(PingData* ping) {
     }
 }
 
+static u16
+checksum(const void* data, u64 len) {
+    u32 sum = 0;
+
+    const u16* ptr;
+    for (ptr = data; len > 1; len -= 2) {
+        sum += *ptr;
+    }
+
+    if (len == 1) {
+        sum += *(const u8*)ptr;
+    }
+
+    sum = (sum >> 16) + (sum & 0xFFFF);
+    sum += (sum >> 16);
+
+    return ~sum;
+}
+
 static void
 send_ping(PingData* ping) {
-    Packet pckt;
+
+    const pid_t pid = getpid();
 
     if (setsockopt(ping->fd, IPPROTO_IP, IP_TTL, &ttl, sizeof(ttl)) != 0) {
         const char* err = strerror(errno);
@@ -128,6 +149,23 @@ send_ping(PingData* ping) {
     }
 
     setsockopt(ping->fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+
+    Packet pkt = {
+            .header = {
+                .type = Icmp_EchoRequest,
+                .code = 0,
+                .id = pid,
+            },
+        };
+    for (u32 i = 0; i < sizeof(pkt.msg); i++) {
+        pkt.msg[i] = i + '0';
+    }
+
+    u32 msg_count = 0;
+    while (pingloop) {
+        pkt.header.seq = msg_count++;
+        pkt.header.cksum = checksum(&pkt, sizeof(pkt));
+    }
 }
 
 int
