@@ -126,6 +126,7 @@ checksum(const void* data, u64 len) {
     const u16* ptr;
     for (ptr = data; len > 1; len -= 2) {
         sum += *ptr;
+        ptr++;
     }
 
     if (len == 1) {
@@ -165,6 +166,7 @@ send_ping(PingData* ping) {
     u16 msg_count = 0;
     while (pingloop) {
         pkt.header.seq = htons(msg_count++);
+        pkt.header.cksum = 0;
         pkt.header.cksum = checksum(&pkt, sizeof(pkt));
 
         const i64 res = sendto(
@@ -182,9 +184,14 @@ send_ping(PingData* ping) {
             exit(EXIT_FAILURE);
         }
 
-        usleep(1000 * 10);
+        usleep(1000 * 1000);
 
-        struct iovec iov;
+        u8 buffer[256];
+        struct iovec iov = {
+            .iov_base = buffer,
+            .iov_len = sizeof(buffer),
+        };
+
         struct msghdr rmsg = {
             .msg_name = &ping->addr,
             .msg_namelen = sizeof(ping->addr),
@@ -199,7 +206,7 @@ send_ping(PingData* ping) {
             exit(EXIT_FAILURE);
         }
 
-        printf("received packet\n");
+        printf("received packet: %ld\n", bytes);
     }
 }
 
