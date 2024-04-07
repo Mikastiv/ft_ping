@@ -3,9 +3,9 @@
 
 #include <arpa/inet.h>
 #include <bits/types/struct_iovec.h>
+#include <bits/types/struct_timeval.h>
 #include <ctype.h>
 #include <errno.h>
-#include <math.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
@@ -16,13 +16,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
 
 #define IPSIZE 16
 #define PKTSIZE 64
+#define MIN_ICMPSIZE 8
 
-static const int ttl = 64;
+static const int TTL = 115;
 static const struct timeval timeout = { .tv_sec = 2 };
 static const char* progname = NULL;
 
@@ -45,6 +47,7 @@ typedef struct {
     u8 ip[IPSIZE];
     u8 host[NI_MAXHOST];
     struct sockaddr_in addr;
+    bool is_ip_format;
 } PingData;
 
 static void
@@ -58,6 +61,27 @@ print_error(const char* restrict fmt, ...) {
 static void
 usage(void) {
     print_error("usage: %s [options] <destination>\n", progname);
+}
+
+static struct timeval
+time_diff(struct timeval a, struct timeval b) {
+    struct timeval out = a;
+
+    out.tv_usec -= b.tv_usec;
+    if (out.tv_usec < 0) {
+        out.tv_sec--;
+        out.tv_usec += 1000000;
+    }
+    out.tv_sec -= b.tv_sec;
+
+    return out;
+}
+
+static float
+to_ms(struct timeval t) {
+    const u64 us = t.tv_usec + t.tv_sec * 1000000;
+    float out = us;
+    return out / 1000.0f;
 }
 
 static bool
@@ -154,7 +178,7 @@ decode_msg(const u8* buffer, const u64 buffer_size, Packet* out) {
 
     const u16 cksum = pkt->header.cksum;
     pkt->header.cksum = 0;
-    pkt->header.cksum = checksum(pkt, sizeof(*pkt));
+    pkt->header.cksum = checksum(pkt, buffer_size - header_size);
     if (cksum != pkt->header.cksum) {
         return false;
     }
@@ -166,7 +190,7 @@ send_ping(PingData* ping) {
 
     const pid_t pid = getpid();
 
-    if (setsockopt(ping->fd, IPPROTO_IP, IP_TTL, &ttl, sizeof(ttl)) != 0) {
+    if (setsockopt(ping->fd, IPPROTO_IP, IP_TTL, &TTL, sizeof(TTL)) != 0) {
         const char* err = strerror(errno);
         print_error("%s: %s\n", progname, err);
         exit(EXIT_FAILURE);
@@ -185,11 +209,26 @@ send_ping(PingData* ping) {
         pkt.msg[i] = i + '0';
     }
 
+    const u8* hostname;
+    u8 host_ip[IPSIZE + 8];
+    host_ip[0] = 0;
+
+    if (ping->is_ip_format) {
+        hostname = ping->ip;
+    } else {
+        hostname = ping->host;
+        sprintf((char*)host_ip, " (%s)", ping->ip);
+    }
+
     u16 msg_count = 0;
     while (pingloop) {
         pkt.header.seq = htons(msg_count++);
         pkt.header.cksum = 0;
         pkt.header.cksum = checksum(&pkt, sizeof(pkt));
+
+        struct timeval start;
+        struct timeval end;
+        gettimeofday(&start, NULL);
 
         const i64 res = sendto(
             ping->fd,
@@ -206,8 +245,6 @@ send_ping(PingData* ping) {
             exit(EXIT_FAILURE);
         }
 
-        usleep(1000 * 1000);
-
         u8 buffer[256];
         struct iovec iov = {
             .iov_base = buffer,
@@ -222,19 +259,37 @@ send_ping(PingData* ping) {
         };
         const i64 bytes = recvmsg(ping->fd, &rmsg, 0);
 
+        gettimeofday(&end, NULL);
+
         if (bytes < 0) {
             const char* err = strerror(errno);
             print_error("%s: %s\n", progname, err);
             exit(EXIT_FAILURE);
         }
 
+        if ((u64)bytes > sizeof(buffer)) {
+            print_error("packet too big (%lu bytes)\n", bytes);
+            exit(EXIT_FAILURE);
+        }
+
         Packet r_pkt;
-        if (!decode_msg(buffer, sizeof(buffer), &r_pkt)) {
+        if (!decode_msg(buffer, bytes, &r_pkt)) {
             printf("invalid packet\n");
             continue;
         }
 
-        printf("received packet: %d\n", ntohs(r_pkt.header.seq));
+        const float time = to_ms(time_diff(end, start));
+        printf(
+            "%lu bytes from %s%s: icmp_seq=%u ttl=%u time=%.2f ms\n",
+            sizeof(Packet),
+            hostname,
+            host_ip,
+            ntohs(r_pkt.header.seq),
+            TTL,
+            time
+        );
+
+        usleep(1000 * 1000);
     }
 }
 
@@ -252,10 +307,14 @@ main(int argc, char* const* argv) {
         .dst = argv[argc - 1],
     };
 
+    ping.is_ip_format = is_ipv4(ping.dst);
+
     ping.addr = lookup_addr(ping.dst);
     inet_ntop(AF_INET, &ping.addr.sin_addr.s_addr, (char*)ping.ip, INET_ADDRSTRLEN);
-    if (!is_ipv4(ping.dst)) {
+    if (!ping.is_ip_format) {
         lookup_hostname(&ping);
+    } else {
+        strcpy((char*)ping.host, (const char*)ping.ip);
     }
 
     if (is_root) {
@@ -276,7 +335,13 @@ main(int argc, char* const* argv) {
 
     signal(SIGINT, int_handler);
 
-    printf("PING %s (%s)\n", ping.dst, ping.ip);
+    printf(
+        "PING %s (%s) %lu(%lu) bytes of data\n",
+        ping.dst,
+        ping.ip,
+        sizeof(Packet) - MIN_ICMPSIZE,
+        sizeof(Packet) + sizeof(struct ip)
+    );
 
     send_ping(&ping);
 
