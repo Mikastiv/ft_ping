@@ -10,7 +10,6 @@
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <signal.h>
-#include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,7 +19,6 @@
 #include <time.h>
 #include <unistd.h>
 
-#define IPSIZE 16
 #define PKTSIZE 64
 #define MIN_ICMPSIZE 8
 
@@ -34,6 +32,7 @@ static void
 int_handler(int signal) {
     (void)signal;
     pingloop = 0;
+    printf("\n");
 }
 
 typedef struct {
@@ -43,24 +42,25 @@ typedef struct {
 
 typedef struct {
     i32 fd;
-    const char* dst;
-    u8 ip[IPSIZE];
+    const u8* dst;
+    u8 ip[INET_ADDRSTRLEN];
     u8 host[NI_MAXHOST];
     struct sockaddr_in addr;
     bool is_ip_format;
 } PingData;
 
 static void
-print_error(const char* restrict fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-    vdprintf(STDERR_FILENO, fmt, args);
-    va_end(args);
+usage(void) {
+    dprintf(STDERR_FILENO, "usage: %s [options] <destination>\n", progname);
 }
 
 static void
-usage(void) {
-    print_error("usage: %s [options] <destination>\n", progname);
+ft_strcpy(u8* dst, const u8* src) {
+    u64 i = 0;
+    while (src[i]) {
+        dst[i] = src[i];
+        i++;
+    }
 }
 
 static struct timeval
@@ -77,15 +77,15 @@ time_diff(struct timeval a, struct timeval b) {
     return out;
 }
 
-static float
+static double
 to_ms(struct timeval t) {
     const u64 us = t.tv_usec + t.tv_sec * 1000000;
-    float out = us;
+    double out = us;
     return out / 1000.0f;
 }
 
 static bool
-is_ipv4(const char* str) {
+is_ipv4(const u8* str) {
     u32 dots = 0;
     for (u32 i = 0; str[i]; i++) {
         if (!isdigit(str[i]) && str[i] != '.') {
@@ -104,7 +104,7 @@ is_ipv4(const char* str) {
 }
 
 static struct sockaddr_in
-lookup_addr(const char* dst) {
+lookup_addr(const u8* dst) {
     struct addrinfo hints = {
         .ai_family = AF_INET,
         .ai_socktype = SOCK_RAW,
@@ -112,10 +112,10 @@ lookup_addr(const char* dst) {
     };
     struct addrinfo* result = NULL;
 
-    const i32 res = getaddrinfo(dst, NULL, &hints, &result);
+    const i32 res = getaddrinfo((const char*)dst, NULL, &hints, &result);
     if (res != 0) {
         const char* err = gai_strerror(res);
-        print_error("%s: %s: %s\n", progname, dst, err);
+        dprintf(STDERR_FILENO, "%s: %s: %s\n", progname, dst, err);
         exit(EXIT_FAILURE);
     }
 
@@ -128,7 +128,7 @@ lookup_addr(const char* dst) {
 static void
 lookup_hostname(PingData* ping) {
     const size_t addrlen = sizeof(struct sockaddr_in);
-    const int res = getnameinfo(
+    const i32 res = getnameinfo(
         (struct sockaddr*)&ping->addr,
         addrlen,
         (char*)ping->host,
@@ -137,10 +137,11 @@ lookup_hostname(PingData* ping) {
         0,
         NI_NAMEREQD
     );
+
     if (res != 0) {
         if (res == EAI_NONAME) return;
         const char* err = gai_strerror(res);
-        print_error("%s: %s: %s\n", progname, ping->dst, err);
+        dprintf(STDERR_FILENO, "%s: %s: %s\n", progname, ping->dst, err);
         exit(EXIT_FAILURE);
     }
 }
@@ -192,11 +193,15 @@ send_ping(PingData* ping) {
 
     if (setsockopt(ping->fd, IPPROTO_IP, IP_TTL, &TTL, sizeof(TTL)) != 0) {
         const char* err = strerror(errno);
-        print_error("%s: %s\n", progname, err);
+        dprintf(STDERR_FILENO, "%s: %s\n", progname, err);
         exit(EXIT_FAILURE);
     }
 
-    setsockopt(ping->fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    if (setsockopt(ping->fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) != 0) {
+        const char* err = strerror(errno);
+        dprintf(STDERR_FILENO, "%s: %s\n", progname, err);
+        exit(EXIT_FAILURE);
+    }
 
     Packet pkt = {
             .header = {
@@ -210,7 +215,7 @@ send_ping(PingData* ping) {
     }
 
     const u8* hostname;
-    u8 host_ip[IPSIZE + 8];
+    u8 host_ip[INET_ADDRSTRLEN + 8];
     host_ip[0] = 0;
 
     if (ping->is_ip_format) {
@@ -221,6 +226,13 @@ send_ping(PingData* ping) {
     }
 
     u16 msg_count = 0;
+    u16 pkt_transmitted = 0;
+    u16 pkt_received = 0;
+
+    struct timeval begin_timestamp;
+    struct timeval end_timestamp;
+    gettimeofday(&begin_timestamp, NULL);
+
     while (pingloop) {
         pkt.header.seq = htons(msg_count++);
         pkt.header.cksum = 0;
@@ -241,9 +253,11 @@ send_ping(PingData* ping) {
 
         if (res < 0) {
             const char* err = strerror(errno);
-            print_error("%s: %s\n", progname, err);
+            dprintf(STDERR_FILENO, "%s: %s\n", progname, err);
             exit(EXIT_FAILURE);
         }
+
+        pkt_transmitted++;
 
         u8 buffer[256];
         struct iovec iov = {
@@ -263,12 +277,7 @@ send_ping(PingData* ping) {
 
         if (bytes < 0) {
             const char* err = strerror(errno);
-            print_error("%s: %s\n", progname, err);
-            exit(EXIT_FAILURE);
-        }
-
-        if ((u64)bytes > sizeof(buffer)) {
-            print_error("packet too big (%lu bytes)\n", bytes);
+            dprintf(STDERR_FILENO, "%s: %s\n", progname, err);
             exit(EXIT_FAILURE);
         }
 
@@ -277,6 +286,8 @@ send_ping(PingData* ping) {
             printf("invalid packet\n");
             continue;
         }
+
+        pkt_received++;
 
         const float time = to_ms(time_diff(end, start));
         printf(
@@ -289,8 +300,21 @@ send_ping(PingData* ping) {
             time
         );
 
+        gettimeofday(&end_timestamp, NULL);
+
         usleep(1000 * 1000);
     }
+
+    double total_time = to_ms(time_diff(end_timestamp, begin_timestamp));
+
+    printf("--- %s ping statistics ---\n", ping->dst);
+    printf(
+        "%u packets transmitted, %u received, %u%% packet loss, time %.0fms\n",
+        pkt_transmitted,
+        pkt_received,
+        1 - (u16)((float)pkt_received / pkt_transmitted),
+        total_time
+    );
 }
 
 int
@@ -304,7 +328,7 @@ main(int argc, char* const* argv) {
     const bool is_root = getuid() == 0;
 
     PingData ping = {
-        .dst = argv[argc - 1],
+        .dst = (const u8*)argv[argc - 1],
     };
 
     ping.is_ip_format = is_ipv4(ping.dst);
@@ -314,7 +338,7 @@ main(int argc, char* const* argv) {
     if (!ping.is_ip_format) {
         lookup_hostname(&ping);
     } else {
-        strcpy((char*)ping.host, (const char*)ping.ip);
+        ft_strcpy(ping.host, ping.ip);
     }
 
     if (is_root) {
@@ -325,10 +349,10 @@ main(int argc, char* const* argv) {
 
     if (ping.fd < 0) {
         if (errno == EPERM || errno == EACCES) {
-            print_error("%s: lacking priviledge for icmp socket\n", progname);
+            dprintf(STDERR_FILENO, "%s: lacking priviledge for icmp socket\n", progname);
         } else {
             const char* err = strerror(errno);
-            print_error("%s: %s\n", progname, err);
+            dprintf(STDERR_FILENO, "%s: %s\n", progname, err);
         }
         exit(EXIT_FAILURE);
     }
@@ -340,10 +364,12 @@ main(int argc, char* const* argv) {
         ping.dst,
         ping.ip,
         sizeof(Packet) - MIN_ICMPSIZE,
-        sizeof(Packet) + sizeof(struct ip)
+        sizeof(Packet) + sizeof(struct ip) // check for non-root if ip header is present
     );
 
     send_ping(&ping);
 
     close(ping.fd);
 }
+
+// TODO: check for dupes
