@@ -1,16 +1,14 @@
-#include "icmp.h"
+#include "ping.h"
 #include "types.h"
+#include "utils.h"
 
 #include <arpa/inet.h>
 #include <bits/types/struct_iovec.h>
 #include <bits/types/struct_timeval.h>
 #include <ctype.h>
 #include <errno.h>
-#include <netdb.h>
-#include <netinet/in.h>
 #include <netinet/ip.h>
 #include <signal.h>
-#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,11 +17,9 @@
 #include <time.h>
 #include <unistd.h>
 
-#define PKTSIZE 64
-#define MIN_ICMPSIZE 8
-
 static const int TTL = 115;
-static const struct timeval timeout = { .tv_sec = 2 };
+static const struct timeval TIMEOUT = { .tv_sec = 2 };
+
 static const char* progname = NULL;
 
 static volatile sig_atomic_t pingloop = 1;
@@ -35,53 +31,9 @@ int_handler(int signal) {
     printf("\n");
 }
 
-typedef struct {
-    IcmpEchoHeader header;
-    u8 msg[PKTSIZE - sizeof(IcmpEchoHeader)];
-} Packet;
-
-typedef struct {
-    i32 fd;
-    const u8* dst;
-    u8 ip[INET_ADDRSTRLEN];
-    u8 host[NI_MAXHOST];
-    struct sockaddr_in addr;
-    bool is_ip_format;
-} PingData;
-
 static void
 usage(void) {
     dprintf(STDERR_FILENO, "usage: %s [options] <destination>\n", progname);
-}
-
-static void
-ft_strcpy(u8* dst, const u8* src) {
-    u64 i = 0;
-    while (src[i]) {
-        dst[i] = src[i];
-        i++;
-    }
-}
-
-static struct timeval
-time_diff(struct timeval a, struct timeval b) {
-    struct timeval out = a;
-
-    out.tv_usec -= b.tv_usec;
-    if (out.tv_usec < 0) {
-        out.tv_sec--;
-        out.tv_usec += 1000000;
-    }
-    out.tv_sec -= b.tv_sec;
-
-    return out;
-}
-
-static double
-to_ms(struct timeval t) {
-    const u64 us = t.tv_usec + t.tv_sec * 1000000;
-    double out = us;
-    return out / 1000.0f;
 }
 
 static bool
@@ -177,6 +129,10 @@ decode_msg(const u8* buffer, const u64 buffer_size, Packet* out) {
     Packet* pkt = (Packet*)(buffer + header_size);
     *out = *pkt;
 
+    if (pkt->header.type != Icmp_EchoReply) {
+        return false;
+    }
+
     const u16 cksum = pkt->header.cksum;
     pkt->header.cksum = 0;
     pkt->header.cksum = checksum(pkt, buffer_size - header_size);
@@ -187,43 +143,60 @@ decode_msg(const u8* buffer, const u64 buffer_size, Packet* out) {
 }
 
 static void
-send_ping(PingData* ping) {
-
-    const pid_t pid = getpid();
-
-    if (setsockopt(ping->fd, IPPROTO_IP, IP_TTL, &TTL, sizeof(TTL)) != 0) {
+init_socket(const i32 fd) {
+    if (setsockopt(fd, IPPROTO_IP, IP_TTL, &TTL, sizeof(TTL)) != 0) {
         const char* err = strerror(errno);
         dprintf(STDERR_FILENO, "%s: %s\n", progname, err);
         exit(EXIT_FAILURE);
     }
 
-    if (setsockopt(ping->fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) != 0) {
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &TIMEOUT, sizeof(TIMEOUT)) != 0) {
         const char* err = strerror(errno);
         dprintf(STDERR_FILENO, "%s: %s\n", progname, err);
         exit(EXIT_FAILURE);
     }
+}
 
+static Packet
+init_packet(const pid_t pid, const u16 seq) {
     Packet pkt = {
             .header = {
                 .type = Icmp_EchoRequest,
                 .code = 0,
                 .id = pid,
+                .seq = htons(seq),
             },
         };
     for (u32 i = 0; i < sizeof(pkt.msg); i++) {
         pkt.msg[i] = i + '0';
     }
 
-    const u8* hostname;
-    u8 host_ip[INET_ADDRSTRLEN + 8];
-    host_ip[0] = 0;
+    pkt.header.cksum = checksum(&pkt, sizeof(pkt));
 
+    return pkt;
+}
+
+static const u8*
+pretty_hostname(const PingData* ping, u8* buffer, const u64 len) {
+    const u8* hostname;
     if (ping->is_ip_format) {
         hostname = ping->ip;
     } else {
         hostname = ping->host;
-        sprintf((char*)host_ip, " (%s)", ping->ip);
+        snprintf((char*)buffer, len, " (%s)", ping->ip);
     }
+
+    return hostname;
+}
+
+static void
+send_ping(PingData* ping) {
+    const pid_t pid = getpid();
+
+    init_socket(ping->fd);
+
+    u8 host_ip[INET_ADDRSTRLEN + 8] = { 0 };
+    const u8* hostname = pretty_hostname(ping, host_ip, sizeof(host_ip));
 
     u16 msg_count = 0;
     u16 pkt_transmitted = 0;
@@ -234,12 +207,9 @@ send_ping(PingData* ping) {
     gettimeofday(&begin_timestamp, NULL);
 
     while (pingloop) {
-        pkt.header.seq = htons(msg_count++);
-        pkt.header.cksum = 0;
-        pkt.header.cksum = checksum(&pkt, sizeof(pkt));
+        Packet pkt = init_packet(pid, msg_count++);
 
         struct timeval start;
-        struct timeval end;
         gettimeofday(&start, NULL);
 
         const i64 res = sendto(
@@ -273,6 +243,7 @@ send_ping(PingData* ping) {
         };
         const i64 bytes = recvmsg(ping->fd, &rmsg, 0);
 
+        struct timeval end;
         gettimeofday(&end, NULL);
 
         if (bytes < 0) {
@@ -373,3 +344,4 @@ main(int argc, char* const* argv) {
 }
 
 // TODO: check for dupes
+// TODO: check 127.0.0.1
