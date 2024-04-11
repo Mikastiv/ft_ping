@@ -2,6 +2,7 @@
 
 #include "types.h"
 
+#include <stdbool.h>
 #include <sys/time.h>
 
 void
@@ -12,3 +13,9 @@ time_diff(struct timeval a, struct timeval b);
 
 double
 to_ms(struct timeval t);
+
+bool
+is_digit(const u8 c);
+
+bool
+is_ipv4(const u8* str);

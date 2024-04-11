@@ -5,7 +5,6 @@
 #include <arpa/inet.h>
 #include <bits/types/struct_iovec.h>
 #include <bits/types/struct_timeval.h>
-#include <ctype.h>
 #include <errno.h>
 #include <netinet/ip.h>
 #include <signal.h>
@@ -34,25 +33,6 @@ int_handler(int signal) {
 static void
 usage(void) {
     dprintf(STDERR_FILENO, "usage: %s [options] <destination>\n", progname);
-}
-
-static bool
-is_ipv4(const u8* str) {
-    u32 dots = 0;
-    for (u32 i = 0; str[i]; i++) {
-        if (!isdigit(str[i]) && str[i] != '.') {
-            return false;
-        }
-        if (str[i] == '.') {
-            dots += 1;
-        }
-    }
-
-    if (dots > 3) {
-        return false;
-    }
-
-    return true;
 }
 
 static struct sockaddr_in
@@ -335,7 +315,7 @@ main(int argc, char* const* argv) {
         ping.dst,
         ping.ip,
         sizeof(Packet) - MIN_ICMPSIZE,
-        sizeof(Packet) + sizeof(struct ip) // check for non-root if ip header is present
+        sizeof(Packet) + sizeof(struct ip) // TODO: check for non-root if ip header is present
     );
 
     send_ping(&ping);
@@ -343,5 +323,5 @@ main(int argc, char* const* argv) {
     close(ping.fd);
 }
 
-// TODO: check for dupes
+// TODO: check for dupes (packets)
 // TODO: check 127.0.0.1
