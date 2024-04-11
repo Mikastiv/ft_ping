@@ -260,9 +260,9 @@ send_ping(PingData* ping) {
 
         pkt_received++;
 
-        const float time = to_ms(time_diff(end, start));
+        const double time = to_ms(time_diff(end, start));
         printf(
-            "%lu bytes from %s%s: icmp_seq=%u ttl=%u time=%.2f ms\n",
+            "%lu bytes from %s%s: icmp_seq=%u ttl=%u time=%.2lf ms\n",
             sizeof(Packet),
             hostname,
             host_ip,
@@ -280,7 +280,7 @@ send_ping(PingData* ping) {
 
     printf("--- %s ping statistics ---\n", ping->dst);
     printf(
-        "%u packets transmitted, %u received, %u%% packet loss, time %.0fms\n",
+        "%u packets transmitted, %u received, %u%% packet loss, time %.0lfms\n",
         pkt_transmitted,
         pkt_received,
         1 - (u16)((float)pkt_received / pkt_transmitted),
@@ -331,7 +331,7 @@ main(int argc, char* const* argv) {
     signal(SIGINT, int_handler);
 
     printf(
-        "PING %s (%s) %lu(%lu) bytes of data\n",
+        "PING %s (%s) %lu(%lu) bytes of data.\n",
         ping.dst,
         ping.ip,
         sizeof(Packet) - MIN_ICMPSIZE,
