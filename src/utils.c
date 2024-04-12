@@ -36,6 +36,11 @@ is_digit(const char c) {
 }
 
 bool
+is_space(const char c) {
+    return (c >= '\t' && c <= '\r') || c == ' ';
+}
+
+bool
 is_ipv4(const char* str) {
     u32 dots = 0;
     for (u32 i = 0; str[i]; i++) {
@@ -52,4 +57,42 @@ is_ipv4(const char* str) {
     }
 
     return true;
+}
+
+static bool
+wrapped(int32_t n, int32_t old, int32_t sign) {
+    if (sign > 0) {
+        if (n < old)
+            return (true);
+        else
+            return (false);
+    } else {
+        if (n > old)
+            return (true);
+        else
+            return (false);
+    }
+}
+
+i32
+ft_atoi(const char* str) {
+    i32 result;
+    i32 sign;
+    i64 old;
+
+    sign = 1;
+    result = 0;
+    while (is_space(*str)) ++str;
+    if (*str == '-') {
+        sign = -1;
+        ++str;
+    } else if (*str == '+')
+        ++str;
+    while (is_digit(*str)) {
+        old = result;
+        result = (result * 10) + ((*str - '0') * sign);
+        if (wrapped(result, old, sign)) return (-1);
+        str++;
+    }
+    return (result);
 }

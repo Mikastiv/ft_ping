@@ -3,6 +3,7 @@
 #include "utils.h"
 
 #include <arpa/inet.h>
+#include <asm-generic/socket.h>
 #include <bits/types/struct_iovec.h>
 #include <bits/types/struct_timeval.h>
 #include <errno.h>
@@ -17,8 +18,8 @@
 #include <time.h>
 #include <unistd.h>
 
-static const int TTL = 115;
-static const struct timeval TIMEOUT = { .tv_sec = 2 };
+static i32 TTL = 115;
+// static const struct timeval TIMEOUT = { .tv_sec = 2 };
 
 static const char* progname = NULL;
 
@@ -44,6 +45,7 @@ usage(void) {
     print_option("-h", "print help ane exit");
     print_option("-v", "verbose output");
     print_option("-n", "no dns name resolution");
+    print_option("-t <ttl>", "define time to live");
 }
 
 static struct sockaddr_in
@@ -135,17 +137,20 @@ decode_msg(const u8* buffer, const u64 buffer_size, Packet* out) {
 
 static void
 init_socket(const i32 fd) {
+    const int one = 1;
+    setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &one, sizeof(one));
+
     if (setsockopt(fd, IPPROTO_IP, IP_TTL, &TTL, sizeof(TTL)) != 0) {
         const char* err = strerror(errno);
         dprintf(STDERR_FILENO, "%s: %s\n", progname, err);
         exit(EXIT_FAILURE);
     }
 
-    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &TIMEOUT, sizeof(TIMEOUT)) != 0) {
-        const char* err = strerror(errno);
-        dprintf(STDERR_FILENO, "%s: %s\n", progname, err);
-        exit(EXIT_FAILURE);
-    }
+    // if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &TIMEOUT, sizeof(TIMEOUT)) != 0) {
+    //     const char* err = strerror(errno);
+    //     dprintf(STDERR_FILENO, "%s: %s\n", progname, err);
+    //     exit(EXIT_FAILURE);
+    // }
 }
 
 static Packet
@@ -279,6 +284,11 @@ send_ping(PingData* ping) {
     );
 }
 
+static void
+invalid_argument(const char* arg) {
+    dprintf(STDERR_FILENO, "%s: invalid argument: '%s'\n", progname, arg);
+}
+
 static Options
 parse_options(const i32 argc, const char* const* argv) {
     if (argc < 2) {
@@ -287,6 +297,8 @@ parse_options(const i32 argc, const char* const* argv) {
     }
 
     Options out = { 0 };
+
+    bool next_arg = false;
 
     for (i32 i = 1; i < argc; i++) {
         if (argv[i][0] == '-') {
@@ -301,6 +313,29 @@ parse_options(const i32 argc, const char* const* argv) {
                     case 'n':
                         out.no_dns = true;
                         break;
+                    case 't': {
+                        out.ttl = true;
+                        out.ttl_value = -1;
+                        if (argv[i][j + 1]) {
+                            out.ttl_value = ft_atoi(&argv[i][j + 1]);
+                            if (out.ttl_value == -1) {
+                                invalid_argument(&argv[i][j + 1]);
+                                exit(EXIT_FAILURE);
+                            }
+                        } else if (i + 1 != argc) {
+                            out.ttl_value = ft_atoi(argv[i + 1]);
+                            if (out.ttl_value == -1) {
+                                invalid_argument(argv[i + 1]);
+                                exit(EXIT_FAILURE);
+                            }
+                            next_arg = true;
+                            goto next;
+                        } else {
+                            usage();
+                            exit(EXIT_FAILURE);
+                        }
+                        break;
+                    }
                     default:
                         dprintf(STDERR_FILENO, "%s: invalid flag: '%c'\n", progname, argv[i][j]);
                         exit(EXIT_FAILURE);
@@ -313,6 +348,17 @@ parse_options(const i32 argc, const char* const* argv) {
         } else {
             out.dst = argv[i];
         }
+
+    next:
+        if (next_arg) {
+            i++;
+        }
+        next_arg = false;
+    }
+
+    if (out.dst == NULL) {
+        dprintf(STDERR_FILENO, "%s: usage error: destination address required\n", progname);
+        exit(EXIT_FAILURE);
     }
 
     return out;
@@ -326,6 +372,10 @@ main(int argc, const char* const* argv) {
     if (options.help) {
         usage();
         exit(EXIT_SUCCESS);
+    }
+
+    if (options.ttl) {
+        TTL = options.ttl_value;
     }
 
     const bool is_root = getuid() == 0;

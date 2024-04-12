@@ -41,4 +41,6 @@ typedef struct {
     bool help;
     bool verbose;
     bool no_dns;
+    bool ttl;
+    i32 ttl_value;
 } Options;

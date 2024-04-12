@@ -18,4 +18,10 @@ bool
 is_digit(const char c);
 
 bool
+is_space(const char c);
+
+bool
 is_ipv4(const char* str);
+
+i32
+ft_atoi(const char* str);
