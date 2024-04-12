@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <netinet/ip.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,12 +32,22 @@ int_handler(int signal) {
 }
 
 static void
+print_option(const char* name, const char* desc) {
+    dprintf(STDERR_FILENO, "  %-20s%s\n", name, desc);
+}
+
+static void
 usage(void) {
-    dprintf(STDERR_FILENO, "usage: %s [options] <destination>\n", progname);
+    dprintf(STDERR_FILENO, "usage: %s [options] <destination>\n\n", progname);
+    dprintf(STDERR_FILENO, "options: \n");
+    print_option("<destination>", "dns name or ip address");
+    print_option("-h", "print help ane exit");
+    print_option("-v", "verbose output");
+    print_option("-n", "no dns name resolution");
 }
 
 static struct sockaddr_in
-lookup_addr(const u8* dst) {
+lookup_addr(const char* dst) {
     struct addrinfo hints = {
         .ai_family = AF_INET,
         .ai_socktype = SOCK_RAW,
@@ -156,9 +167,9 @@ init_packet(const pid_t pid, const u16 seq) {
     return pkt;
 }
 
-static const u8*
-pretty_hostname(const PingData* ping, u8* buffer, const u64 len) {
-    const u8* hostname;
+static const char*
+pretty_hostname(const PingData* ping, char* buffer, const u64 len) {
+    const char* hostname;
     if (ping->is_ip_format) {
         hostname = ping->ip;
     } else {
@@ -175,8 +186,8 @@ send_ping(PingData* ping) {
 
     init_socket(ping->fd);
 
-    u8 host_ip[INET_ADDRSTRLEN + 8] = { 0 };
-    const u8* hostname = pretty_hostname(ping, host_ip, sizeof(host_ip));
+    char host_ip[INET_ADDRSTRLEN + 8] = { 0 };
+    const char* hostname = pretty_hostname(ping, host_ip, sizeof(host_ip));
 
     u16 msg_count = 0;
     u16 pkt_transmitted = 0;
@@ -268,18 +279,59 @@ send_ping(PingData* ping) {
     );
 }
 
-int
-main(int argc, char* const* argv) {
-    progname = argc > 0 ? argv[0] : "ft_ping";
+static Options
+parse_options(const i32 argc, const char* const* argv) {
     if (argc < 2) {
         usage();
         exit(EXIT_FAILURE);
     }
 
+    Options out = { 0 };
+
+    for (i32 i = 1; i < argc; i++) {
+        if (argv[i][0] == '-') {
+            for (i32 j = 1; argv[i][j]; j++) {
+                switch (argv[i][j]) {
+                    case 'v':
+                        out.verbose = true;
+                        break;
+                    case 'h':
+                        out.help = true;
+                        break;
+                    case 'n':
+                        out.no_dns = true;
+                        break;
+                    default:
+                        dprintf(STDERR_FILENO, "%s: invalid flag: '%c'\n", progname, argv[i][j]);
+                        exit(EXIT_FAILURE);
+                        break;
+                }
+            }
+        } else if (out.dst != NULL) {
+            usage();
+            exit(EXIT_FAILURE);
+        } else {
+            out.dst = argv[i];
+        }
+    }
+
+    return out;
+}
+
+int
+main(int argc, const char* const* argv) {
+    progname = argc > 0 ? argv[0] : "ft_ping";
+    const Options options = parse_options(argc, argv);
+
+    if (options.help) {
+        usage();
+        exit(EXIT_SUCCESS);
+    }
+
     const bool is_root = getuid() == 0;
 
     PingData ping = {
-        .dst = (const u8*)argv[argc - 1],
+        .dst = options.dst,
     };
 
     ping.is_ip_format = is_ipv4(ping.dst);

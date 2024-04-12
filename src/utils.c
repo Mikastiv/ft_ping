@@ -1,7 +1,7 @@
 #include "utils.h"
 
 void
-ft_strcpy(u8* dst, const u8* src) {
+ft_strcpy(char* dst, const char* src) {
     u64 i = 0;
     while (src[i]) {
         dst[i] = src[i];
@@ -31,12 +31,12 @@ to_ms(struct timeval t) {
 }
 
 bool
-is_digit(const u8 c) {
+is_digit(const char c) {
     return c >= '0' && c <= '9';
 }
 
 bool
-is_ipv4(const u8* str) {
+is_ipv4(const char* str) {
     u32 dots = 0;
     for (u32 i = 0; str[i]; i++) {
         if (!is_digit(str[i]) && str[i] != '.') {

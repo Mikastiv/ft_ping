@@ -6,7 +6,7 @@
 #include <sys/time.h>
 
 void
-ft_strcpy(u8* dst, const u8* src);
+ft_strcpy(char* dst, const char* src);
 
 struct timeval
 time_diff(struct timeval a, struct timeval b);
@@ -15,7 +15,7 @@ double
 to_ms(struct timeval t);
 
 bool
-is_digit(const u8 c);
+is_digit(const char c);
 
 bool
-is_ipv4(const u8* str);
+is_ipv4(const char* str);

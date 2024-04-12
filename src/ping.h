@@ -29,9 +29,16 @@ typedef struct {
 
 typedef struct {
     i32 fd;
-    const u8* dst;
-    u8 ip[INET_ADDRSTRLEN];
-    u8 host[NI_MAXHOST];
+    const char* dst;
+    char ip[INET_ADDRSTRLEN];
+    char host[NI_MAXHOST];
     struct sockaddr_in addr;
     bool is_ip_format;
 } PingData;
+
+typedef struct {
+    const char* dst;
+    bool help;
+    bool verbose;
+    bool no_dns;
+} Options;
