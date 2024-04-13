@@ -7,6 +7,7 @@
 #include <bits/types/struct_iovec.h>
 #include <bits/types/struct_timeval.h>
 #include <errno.h>
+#include <netinet/in.h>
 #include <netinet/ip.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -231,8 +232,9 @@ send_ping(PingData* ping) {
             .iov_len = sizeof(buffer),
         };
 
+        struct sockaddr_in addr = ping->addr;
         struct msghdr rmsg = {
-            .msg_name = &ping->addr,
+            .msg_name = &addr,
             .msg_namelen = sizeof(ping->addr),
             .msg_iov = &iov,
             .msg_iovlen = 1,
@@ -250,7 +252,14 @@ send_ping(PingData* ping) {
 
         Packet r_pkt;
         if (!decode_msg(buffer, bytes, &r_pkt)) {
-            printf("invalid packet\n");
+            if (r_pkt.header.type == Icmp_TimeExceeded) {
+                // TODO: better print
+                printf("time to live exceeded\n");
+            } else {
+                printf("checksum mismatch\n");
+            }
+
+            usleep(1000 * 1000);
             continue;
         }
 

@@ -12,6 +12,7 @@
 typedef enum {
     Icmp_EchoReply = 0,
     Icmp_EchoRequest = 8,
+    Icmp_TimeExceeded = 11,
 } IcmpType;
 
 typedef struct {
