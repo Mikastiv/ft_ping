@@ -192,6 +192,14 @@ send_ping(PingData* ping) {
 
     init_socket(ping->fd);
 
+    printf(
+        "PING %s (%s) %lu(%lu) bytes of data.\n",
+        ping->dst,
+        ping->ip,
+        sizeof(Packet) - MIN_ICMPSIZE,
+        sizeof(Packet) + sizeof(struct ip) // TODO: check for non-root if ip header is present
+    );
+
     char host_ip[INET_ADDRSTRLEN + 8] = { 0 };
     const char* hostname = pretty_hostname(ping, host_ip, sizeof(host_ip));
 
@@ -420,14 +428,6 @@ main(int argc, const char* const* argv) {
     }
 
     signal(SIGINT, int_handler);
-
-    printf(
-        "PING %s (%s) %lu(%lu) bytes of data.\n",
-        ping.dst,
-        ping.ip,
-        sizeof(Packet) - MIN_ICMPSIZE,
-        sizeof(Packet) + sizeof(struct ip) // TODO: check for non-root if ip header is present
-    );
 
     send_ping(&ping);
 
