@@ -3,9 +3,6 @@
 #include "utils.h"
 
 #include <arpa/inet.h>
-#include <asm-generic/socket.h>
-#include <bits/types/struct_iovec.h>
-#include <bits/types/struct_timeval.h>
 #include <errno.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
@@ -72,13 +69,12 @@ lookup_addr(const char* dst) {
 }
 
 static void
-lookup_hostname(PingData* ping) {
-    const size_t addrlen = sizeof(struct sockaddr_in);
+lookup_hostname(struct sockaddr_in addr, char* buffer, const u64 buf_size) {
     const i32 res = getnameinfo(
-        (struct sockaddr*)&ping->addr,
-        addrlen,
-        (char*)ping->host,
-        sizeof(ping->host),
+        (struct sockaddr*)&addr,
+        sizeof(struct sockaddr_in),
+        buffer,
+        buf_size,
         NULL,
         0,
         NI_NAMEREQD
@@ -87,7 +83,9 @@ lookup_hostname(PingData* ping) {
     if (res != 0) {
         if (res == EAI_NONAME) return;
         const char* err = gai_strerror(res);
-        dprintf(STDERR_FILENO, "%s: %s: %s\n", progname, ping->dst, err);
+        char tmp[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, (const char*)&addr.sin_addr.s_addr, tmp, sizeof(tmp));
+        dprintf(STDERR_FILENO, "%s: %s: %s\n", progname, tmp, err);
         exit(EXIT_FAILURE);
     }
 }
@@ -113,17 +111,19 @@ checksum(const void* data, u64 len) {
 }
 
 static bool
-decode_msg(const u8* buffer, const u64 buffer_size, Packet* out) {
+decode_msg(const u8* buffer, const u64 buffer_size, Packet* out, u64* ip_hdr_size) {
     const struct ip* ip_header = (struct ip*)buffer;
     const u64 header_size = ip_header->ip_hl << 2;
-    if (buffer_size < header_size + PKTSIZE) {
-        return false;
-    }
+    *ip_hdr_size = header_size;
 
     Packet* pkt = (Packet*)(buffer + header_size);
     *out = *pkt;
 
     if (pkt->header.type != Icmp_EchoReply) {
+        return false;
+    }
+
+    if (buffer_size < header_size + PKTSIZE) {
         return false;
     }
 
@@ -193,11 +193,10 @@ send_ping(PingData* ping) {
     init_socket(ping->fd);
 
     printf(
-        "PING %s (%s) %lu(%lu) bytes of data.\n",
+        "PING %s (%s) %lu data bytes\n",
         ping->dst,
         ping->ip,
-        sizeof(Packet) - MIN_ICMPSIZE,
-        sizeof(Packet) + sizeof(struct ip) // TODO: check for non-root if ip header is present
+        sizeof(Packet) - MIN_ICMPSIZE
     );
 
     char host_ip[INET_ADDRSTRLEN + 8] = { 0 };
@@ -259,10 +258,12 @@ send_ping(PingData* ping) {
         }
 
         Packet r_pkt;
-        if (!decode_msg(buffer, bytes, &r_pkt)) {
+        u64 ip_hdr_size = 0;
+        if (!decode_msg(buffer, bytes, &r_pkt, &ip_hdr_size)) {
             if (r_pkt.header.type == Icmp_TimeExceeded) {
-                // TODO: better print
-                printf("time to live exceeded\n");
+                struct sockaddr_in* src_addr = rmsg.msg_name;
+                inet_ntop(AF_INET, &src_addr->sin_addr.s_addr, host_ip, sizeof(host_ip));
+                printf("%lld bytes from %s: Time to live exceeded\n", bytes - ip_hdr_size, host_ip);
             } else {
                 printf("checksum mismatch\n");
             }
@@ -289,15 +290,13 @@ send_ping(PingData* ping) {
         usleep(1000 * 1000);
     }
 
-    double total_time = to_ms(time_diff(end_timestamp, begin_timestamp));
 
     printf("--- %s ping statistics ---\n", ping->dst);
     printf(
-        "%u packets transmitted, %u received, %u%% packet loss, time %.0lfms\n",
+        "%u packets transmitted, %u received, %u%% packet loss\n",
         pkt_transmitted,
         pkt_received,
-        1 - (u16)((float)pkt_received / pkt_transmitted),
-        total_time
+        (u16)((float)(pkt_transmitted - pkt_received) / pkt_transmitted * 100.0)
     );
 }
 
@@ -406,7 +405,7 @@ main(int argc, const char* const* argv) {
     ping.addr = lookup_addr(ping.dst);
     inet_ntop(AF_INET, &ping.addr.sin_addr.s_addr, (char*)ping.ip, INET_ADDRSTRLEN);
     if (!ping.is_ip_format) {
-        lookup_hostname(&ping);
+        lookup_hostname(ping.addr, ping.host, sizeof(ping.host));
     } else {
         ft_strcpy(ping.host, ping.ip);
     }
