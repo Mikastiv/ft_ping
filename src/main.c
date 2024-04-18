@@ -68,8 +68,8 @@ lookup_addr(const char* dst) {
     return out;
 }
 
-static void
-lookup_hostname(struct sockaddr_in addr, char* buffer, const u64 buf_size) {
+static bool
+dns_lookup(struct sockaddr_in addr, char* buffer, const u64 buf_size) {
     const i32 res = getnameinfo(
         (struct sockaddr*)&addr,
         sizeof(struct sockaddr_in),
@@ -81,13 +81,19 @@ lookup_hostname(struct sockaddr_in addr, char* buffer, const u64 buf_size) {
     );
 
     if (res != 0) {
-        if (res == EAI_NONAME) return;
-        const char* err = gai_strerror(res);
+        buffer[0] = 0;
+
+        if (res == EAI_NONAME) return false;
+
         char tmp[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, (const char*)&addr.sin_addr.s_addr, tmp, sizeof(tmp));
+
+        const char* err = gai_strerror(res);
         dprintf(STDERR_FILENO, "%s: %s: %s\n", progname, tmp, err);
         exit(EXIT_FAILURE);
     }
+
+    return true;
 }
 
 static u16
@@ -111,9 +117,9 @@ checksum(const void* data, u64 len) {
 }
 
 static bool
-decode_msg(const u8* buffer, const u64 buffer_size, Packet* out, u64* ip_hdr_size) {
+decode_msg(const u8* buffer, const u64 buffer_size, Packet* out, u32* ip_hdr_size) {
     const struct ip* ip_header = (struct ip*)buffer;
-    const u64 header_size = ip_header->ip_hl << 2;
+    const u32 header_size = ip_header->ip_hl << 2;
     *ip_hdr_size = header_size;
 
     Packet* pkt = (Packet*)(buffer + header_size);
@@ -173,42 +179,17 @@ init_packet(const pid_t pid, const u16 seq) {
     return pkt;
 }
 
-static const char*
-pretty_hostname(const PingData* ping, char* buffer, const u64 len) {
-    const char* hostname;
-    if (ping->is_ip_format) {
-        hostname = ping->ip;
-    } else {
-        hostname = ping->host;
-        snprintf((char*)buffer, len, " (%s)", ping->ip);
-    }
-
-    return hostname;
-}
-
 static void
 send_ping(PingData* ping) {
     const pid_t pid = getpid();
 
     init_socket(ping->fd);
 
-    printf(
-        "PING %s (%s) %lu data bytes\n",
-        ping->dst,
-        ping->ip,
-        sizeof(Packet) - MIN_ICMPSIZE
-    );
-
-    char host_ip[INET_ADDRSTRLEN + 8] = { 0 };
-    const char* hostname = pretty_hostname(ping, host_ip, sizeof(host_ip));
+    printf("PING %s (%s) %lu data bytes\n", ping->dst, ping->ip, sizeof(Packet) - MIN_ICMPSIZE);
 
     u16 msg_count = 0;
     u16 pkt_transmitted = 0;
     u16 pkt_received = 0;
-
-    struct timeval begin_timestamp;
-    struct timeval end_timestamp;
-    gettimeofday(&begin_timestamp, NULL);
 
     while (pingloop) {
         Packet pkt = init_packet(pid, msg_count++);
@@ -224,6 +205,11 @@ send_ping(PingData* ping) {
             (struct sockaddr*)&ping->addr,
             sizeof(struct sockaddr)
         );
+
+        if (res == 0) {
+            dprintf(STDERR_FILENO, "%s: socket closed\n", progname);
+            exit(EXIT_FAILURE);
+        }
 
         if (res < 0) {
             const char* err = strerror(errno);
@@ -251,6 +237,11 @@ send_ping(PingData* ping) {
         struct timeval end;
         gettimeofday(&end, NULL);
 
+        if (bytes == 0) {
+            dprintf(STDERR_FILENO, "%s: socket closed\n", progname);
+            exit(EXIT_FAILURE);
+        }
+
         if (bytes < 0) {
             const char* err = strerror(errno);
             dprintf(STDERR_FILENO, "%s: %s\n", progname, err);
@@ -258,38 +249,55 @@ send_ping(PingData* ping) {
         }
 
         Packet r_pkt;
-        u64 ip_hdr_size = 0;
-        if (!decode_msg(buffer, bytes, &r_pkt, &ip_hdr_size)) {
-            if (r_pkt.header.type == Icmp_TimeExceeded) {
-                struct sockaddr_in* src_addr = rmsg.msg_name;
-                inet_ntop(AF_INET, &src_addr->sin_addr.s_addr, host_ip, sizeof(host_ip));
-                printf("%lld bytes from %s: Time to live exceeded\n", bytes - ip_hdr_size, host_ip);
-            } else {
-                printf("checksum mismatch\n");
+        u32 ip_hdr_size = 0;
+
+        const bool receive_success = decode_msg(buffer, bytes, &r_pkt, &ip_hdr_size);
+
+        char src_ip[INET_ADDRSTRLEN] = { 0 };
+        struct sockaddr_in* src_addr = rmsg.msg_name;
+        inet_ntop(AF_INET, &src_addr->sin_addr.s_addr, src_ip, sizeof(src_ip));
+
+        if (!receive_success) {
+            switch (r_pkt.header.type) {
+                case Icmp_TimeExceeded:
+                    printf(
+                        "%lu bytes from %s: Time to live exceeded\n",
+                        bytes - ip_hdr_size,
+                        src_ip
+                    );
+                    break;
+                case Icmp_EchoReply:
+                    printf("checksum mismatch\n");
+                    break;
+                case Icmp_EchoRequest:
+                    // from localhost
+                    pkt_transmitted--;
+                    continue;
+                    break;
+                default:
+                    printf("unknown error\n");
+                    break;
             }
 
-            usleep(1000 * 1000);
-            continue;
+            goto next_ping;
         }
 
         pkt_received++;
 
         const double time = to_ms(time_diff(end, start));
+
         printf(
-            "%lu bytes from %s%s: icmp_seq=%u ttl=%u time=%.2lf ms\n",
+            "%lu bytes from %s: icmp_seq=%u ttl=%u time=%.2lf ms\n",
             sizeof(Packet),
-            hostname,
-            host_ip,
+            src_ip,
             ntohs(r_pkt.header.seq),
             TTL,
             time
         );
 
-        gettimeofday(&end_timestamp, NULL);
-
+    next_ping:
         usleep(1000 * 1000);
     }
-
 
     printf("--- %s ping statistics ---\n", ping->dst);
     printf(
@@ -338,6 +346,7 @@ parse_options(const i32 argc, const char* const* argv) {
                                 invalid_argument(&argv[i][j + 1]);
                                 exit(EXIT_FAILURE);
                             }
+                            goto next;
                         } else if (i + 1 != argc) {
                             out.ttl_value = ft_atoi(argv[i + 1]);
                             if (out.ttl_value == -1) {
@@ -401,14 +410,9 @@ main(int argc, const char* const* argv) {
     };
 
     ping.is_ip_format = is_ipv4(ping.dst);
-
     ping.addr = lookup_addr(ping.dst);
-    inet_ntop(AF_INET, &ping.addr.sin_addr.s_addr, (char*)ping.ip, INET_ADDRSTRLEN);
-    if (!ping.is_ip_format) {
-        lookup_hostname(ping.addr, ping.host, sizeof(ping.host));
-    } else {
-        ft_strcpy(ping.host, ping.ip);
-    }
+    inet_ntop(AF_INET, &ping.addr.sin_addr.s_addr, ping.ip, INET_ADDRSTRLEN);
+    dns_lookup(ping.addr, ping.host, sizeof(ping.host));
 
     if (is_root) {
         ping.fd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
@@ -434,4 +438,3 @@ main(int argc, const char* const* argv) {
 }
 
 // TODO: check for dupes (packets)
-// TODO: check 127.0.0.1
