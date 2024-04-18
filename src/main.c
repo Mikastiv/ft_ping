@@ -4,6 +4,7 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <signal.h>
@@ -20,6 +21,7 @@ static i32 TTL = 115;
 // static const struct timeval TIMEOUT = { .tv_sec = 2 };
 
 static const char* progname = NULL;
+Options options = { 0 };
 
 static volatile sig_atomic_t pingloop = 1;
 
@@ -83,7 +85,7 @@ dns_lookup(struct sockaddr_in addr, char* buffer, const u64 buf_size) {
     if (res != 0) {
         buffer[0] = 0;
 
-        if (res == EAI_NONAME) return false;
+        if (res == EAI_NONAME || res == EAI_AGAIN) return false;
 
         char tmp[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, (const char*)&addr.sin_addr.s_addr, tmp, sizeof(tmp));
@@ -254,17 +256,22 @@ send_ping(PingData* ping) {
         const bool receive_success = decode_msg(buffer, bytes, &r_pkt, &ip_hdr_size);
 
         char src_ip[INET_ADDRSTRLEN] = { 0 };
+        char addrname[NI_MAXHOST] = { 0 };
+
         struct sockaddr_in* src_addr = rmsg.msg_name;
         inet_ntop(AF_INET, &src_addr->sin_addr.s_addr, src_ip, sizeof(src_ip));
+        const bool dns_lookup_success = dns_lookup(*src_addr, addrname, sizeof(addrname));
 
         if (!receive_success) {
             switch (r_pkt.header.type) {
                 case Icmp_TimeExceeded:
-                    printf(
-                        "%lu bytes from %s: Time to live exceeded\n",
-                        bytes - ip_hdr_size,
-                        src_ip
-                    );
+                    printf("%lu bytes from ", bytes - ip_hdr_size);
+                    if (!options.no_dns && dns_lookup_success) {
+                        printf("%s (%s): ", addrname, src_ip);
+                    } else {
+                        printf("%s: ", src_ip);
+                    }
+                    printf("Time to live exceeded\n");
                     break;
                 case Icmp_EchoReply:
                     printf("checksum mismatch\n");
@@ -286,14 +293,15 @@ send_ping(PingData* ping) {
 
         const double time = to_ms(time_diff(end, start));
 
-        printf(
-            "%lu bytes from %s: icmp_seq=%u ttl=%u time=%.2lf ms\n",
-            sizeof(Packet),
-            src_ip,
-            ntohs(r_pkt.header.seq),
-            TTL,
-            time
-        );
+        printf("%lu bytes from ", bytes - ip_hdr_size);
+
+        if (!options.no_dns && dns_lookup(*src_addr, addrname, sizeof(addrname))) {
+            printf("%s (%s): ", addrname, src_ip);
+        } else {
+            printf("%s: ", src_ip);
+        }
+
+        printf("icmp_seq=%u ttl=%u time=%.2lf ms\n", ntohs(r_pkt.header.seq), TTL, time);
 
     next_ping:
         usleep(1000 * 1000);
@@ -392,7 +400,7 @@ parse_options(const i32 argc, const char* const* argv) {
 int
 main(int argc, const char* const* argv) {
     progname = argc > 0 ? argv[0] : "ft_ping";
-    const Options options = parse_options(argc, argv);
+    options = parse_options(argc, argv);
 
     if (options.help) {
         usage();
@@ -414,14 +422,10 @@ main(int argc, const char* const* argv) {
     inet_ntop(AF_INET, &ping.addr.sin_addr.s_addr, ping.ip, INET_ADDRSTRLEN);
     dns_lookup(ping.addr, ping.host, sizeof(ping.host));
 
-    if (is_root) {
-        ping.fd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
-    } else {
-        ping.fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP);
-    }
+    ping.fd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
 
     if (ping.fd < 0) {
-        if (errno == EPERM || errno == EACCES) {
+        if (!is_root && (errno == EPERM || errno == EACCES)) {
             dprintf(STDERR_FILENO, "%s: lacking priviledge for icmp socket\n", progname);
         } else {
             const char* err = strerror(errno);
@@ -438,3 +442,4 @@ main(int argc, const char* const* argv) {
 }
 
 // TODO: check for dupes (packets)
+// TODO: SIGALARM
