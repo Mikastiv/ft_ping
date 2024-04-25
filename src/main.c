@@ -192,6 +192,7 @@ send_ping(PingData* ping) {
     u16 msg_count = 0;
     u16 pkt_transmitted = 0;
     u16 pkt_received = 0;
+    i32 last_received = -1;
 
     while (pingloop) {
         Packet pkt = init_packet(pid, msg_count++);
@@ -234,7 +235,7 @@ send_ping(PingData* ping) {
             .msg_iov = &iov,
             .msg_iovlen = 1,
         };
-        const i64 bytes = recvmsg(ping->fd, &rmsg, 0);
+        const ssize_t bytes = recvmsg(ping->fd, &rmsg, 0);
 
         struct timeval end;
         gettimeofday(&end, NULL);
@@ -289,19 +290,28 @@ send_ping(PingData* ping) {
             goto next_ping;
         }
 
-        pkt_received++;
+        const u16 packet_seq = ntohs(r_pkt.header.seq);
+        const bool is_duplicate = (i32)packet_seq <= last_received;
+
+        if (!is_duplicate) {
+            pkt_received++;
+        }
 
         const double time = to_ms(time_diff(end, start));
 
         printf("%lu bytes from ", bytes - ip_hdr_size);
 
-        if (!options.no_dns && dns_lookup(*src_addr, addrname, sizeof(addrname))) {
+        if (!options.no_dns && dns_lookup_success) {
             printf("%s (%s): ", addrname, src_ip);
         } else {
             printf("%s: ", src_ip);
         }
 
-        printf("icmp_seq=%u ttl=%u time=%.2lf ms\n", ntohs(r_pkt.header.seq), TTL, time);
+        if (is_duplicate) {
+            printf("duplicate packet %u\n", packet_seq);
+        } else {
+            printf("icmp_seq=%u ttl=%u time=%.2lf ms\n", packet_seq, TTL, time);
+        }
 
     next_ping:
         usleep(1000 * 1000);
@@ -441,5 +451,4 @@ main(int argc, const char* const* argv) {
     close(ping.fd);
 }
 
-// TODO: check for dupes (packets)
 // TODO: SIGALARM
