@@ -450,5 +450,3 @@ main(int argc, const char* const* argv) {
 
     close(ping.fd);
 }
-
-// TODO: SIGALARM
