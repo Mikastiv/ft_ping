@@ -21,7 +21,7 @@ static i32 TTL = 115;
 // static const struct timeval TIMEOUT = { .tv_sec = 2 };
 
 static const char* progname = NULL;
-Options options = { 0 };
+Options options = { .no_dns = true };
 
 static volatile sig_atomic_t pingloop = 1;
 
@@ -359,14 +359,14 @@ parse_options(const i32 argc, const char* const* argv) {
                         out.ttl = true;
                         out.ttl_value = -1;
                         if (argv[i][j + 1]) {
-                            out.ttl_value = ft_atoi(&argv[i][j + 1]);
+                            out.ttl_value = atoi(&argv[i][j + 1]);
                             if (out.ttl_value == -1) {
                                 invalid_argument(&argv[i][j + 1]);
                                 exit(EXIT_FAILURE);
                             }
                             goto next;
                         } else if (i + 1 != argc) {
-                            out.ttl_value = ft_atoi(argv[i + 1]);
+                            out.ttl_value = atoi(argv[i + 1]);
                             if (out.ttl_value == -1) {
                                 invalid_argument(argv[i + 1]);
                                 exit(EXIT_FAILURE);

@@ -1,14 +1,5 @@
 #include "utils.h"
 
-void
-ft_strcpy(char* dst, const char* src) {
-    u64 i = 0;
-    while (src[i]) {
-        dst[i] = src[i];
-        i++;
-    }
-}
-
 struct timeval
 time_diff(struct timeval a, struct timeval b) {
     struct timeval out = a;
@@ -57,42 +48,4 @@ is_ipv4(const char* str) {
     }
 
     return true;
-}
-
-static bool
-wrapped(int32_t n, int32_t old, int32_t sign) {
-    if (sign > 0) {
-        if (n < old)
-            return (true);
-        else
-            return (false);
-    } else {
-        if (n > old)
-            return (true);
-        else
-            return (false);
-    }
-}
-
-i32
-ft_atoi(const char* str) {
-    i32 result;
-    i32 sign;
-    i64 old;
-
-    sign = 1;
-    result = 0;
-    while (is_space(*str)) ++str;
-    if (*str == '-') {
-        sign = -1;
-        ++str;
-    } else if (*str == '+')
-        ++str;
-    while (is_digit(*str)) {
-        old = result;
-        result = (result * 10) + ((*str - '0') * sign);
-        if (wrapped(result, old, sign)) return (-1);
-        str++;
-    }
-    return (result);
 }

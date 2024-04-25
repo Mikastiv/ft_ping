@@ -5,9 +5,6 @@
 #include <stdbool.h>
 #include <sys/time.h>
 
-void
-ft_strcpy(char* dst, const char* src);
-
 struct timeval
 time_diff(struct timeval a, struct timeval b);
 
@@ -22,6 +19,3 @@ is_space(const char c);
 
 bool
 is_ipv4(const char* str);
-
-i32
-ft_atoi(const char* str);
