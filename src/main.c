@@ -17,8 +17,6 @@
 #include <time.h>
 #include <unistd.h>
 
-static i32 TTL = 115;
-
 static const char* progname = NULL;
 Options options = { .no_dns = true };
 
@@ -125,10 +123,9 @@ checksum(const void* data, u64 len) {
 }
 
 static bool
-decode_msg(const u8* buffer, const u64 buffer_size, Packet* out, u32* ip_hdr_size) {
-    const struct ip* ip_header = (struct ip*)buffer;
-    const u32 header_size = ip_header->ip_hl << 2;
-    *ip_hdr_size = header_size;
+decode_msg(const u8* buffer, const u64 buffer_size, Packet* out, struct ip** ip) {
+    *ip = (struct ip*)buffer;
+    const u32 header_size = (*ip)->ip_hl << 2;
 
     Packet* pkt = (Packet*)(buffer + header_size);
     *out = *pkt;
@@ -152,10 +149,13 @@ decode_msg(const u8* buffer, const u64 buffer_size, Packet* out, u32* ip_hdr_siz
 
 static void
 init_socket(const i32 fd) {
-    if (setsockopt(fd, IPPROTO_IP, IP_TTL, &TTL, sizeof(TTL)) != 0) {
-        const char* err = strerror(errno);
-        dprintf(STDERR_FILENO, "%s: %s\n", progname, err);
-        exit(EXIT_FAILURE);
+    if (options.ttl) {
+        const i32 ttl = options.ttl_value;
+        if (setsockopt(fd, IPPROTO_IP, IP_TTL, &ttl, sizeof(ttl)) != 0) {
+            const char* err = strerror(errno);
+            dprintf(STDERR_FILENO, "%s: %s\n", progname, err);
+            exit(EXIT_FAILURE);
+        }
     }
 }
 
@@ -189,7 +189,11 @@ send_ping(PingData* ping) {
 
     init_socket(ping->fd);
 
-    printf("PING %s (%s) %lu data bytes\n", ping->dst, ping->ip, sizeof(Packet) - MIN_ICMPSIZE);
+    printf("PING %s (%s) %lu data bytes", ping->dst, ping->ip, sizeof(Packet) - MIN_ICMPSIZE);
+    if (options.verbose) {
+        printf(", id 0x%04x = %d", pid, pid);
+    }
+    printf("\n");
 
     u16 msg_count = 0;
     u16 pkt_transmitted = 0;
@@ -254,9 +258,9 @@ send_ping(PingData* ping) {
         }
 
         Packet r_pkt;
-        u32 ip_hdr_size = 0;
+        struct ip* ip;
 
-        const bool receive_success = decode_msg(buffer, bytes, &r_pkt, &ip_hdr_size);
+        const bool receive_success = decode_msg(buffer, bytes, &r_pkt, &ip);
 
         char src_ip[INET_ADDRSTRLEN] = { 0 };
         char addrname[NI_MAXHOST] = { 0 };
@@ -268,7 +272,7 @@ send_ping(PingData* ping) {
         if (!receive_success) {
             switch (r_pkt.header.type) {
                 case Icmp_TimeExceeded:
-                    printf("%lu bytes from ", bytes - ip_hdr_size);
+                    printf("%lu bytes from ", bytes - (ip->ip_hl << 2));
                     if (!options.no_dns && dns_lookup_success) {
                         printf("%s (%s): ", addrname, src_ip);
                     } else {
@@ -301,7 +305,7 @@ send_ping(PingData* ping) {
 
         const double time = to_ms(time_diff(end, start));
 
-        printf("%lu bytes from ", bytes - ip_hdr_size);
+        printf("%lu bytes from ", bytes - (ip->ip_hl << 2));
 
         if (!options.no_dns && dns_lookup_success) {
             printf("%s (%s): ", addrname, src_ip);
@@ -312,7 +316,7 @@ send_ping(PingData* ping) {
         if (is_duplicate) {
             printf("duplicate packet %u\n", packet_seq);
         } else {
-            printf("icmp_seq=%u ttl=%u time=%.2lf ms\n", packet_seq, TTL, time);
+            printf("icmp_seq=%u ttl=%u time=%.2lf ms\n", packet_seq, ip->ip_ttl, time);
         }
 
     next_ping:
@@ -371,8 +375,18 @@ parse_options(const i32 argc, const char* const* argv) {
                     }
 
                     out.ttl_value = atoi(argv[i + 1]);
-                    if (out.ttl_value == -1) {
+                    if (out.ttl_value < 0) {
                         invalid_argument(argv[i + 1]);
+                        exit(EXIT_FAILURE);
+                    }
+
+                    if (out.timeout_value <= 0 || out.ttl_value > 255) {
+                        dprintf(
+                            STDERR_FILENO,
+                            "%s: invalid ttl value: '%d'\n",
+                            progname,
+                            out.timeout_value
+                        );
                         exit(EXIT_FAILURE);
                     }
 
@@ -389,8 +403,13 @@ parse_options(const i32 argc, const char* const* argv) {
                     }
 
                     out.timeout_value = atoi(argv[i + 1]);
-                    if (out.timeout_value == -1) {
-                        invalid_argument(argv[i + 1]);
+                    if (out.timeout_value <= 0) {
+                        dprintf(
+                            STDERR_FILENO,
+                            "%s: invalid timeout value: '%d'\n",
+                            progname,
+                            out.timeout_value
+                        );
                         exit(EXIT_FAILURE);
                     }
 
@@ -434,10 +453,6 @@ main(int argc, const char* const* argv) {
         exit(EXIT_SUCCESS);
     }
 
-    if (options.ttl) {
-        TTL = options.ttl_value;
-    }
-
     const bool is_root = getuid() == 0;
 
     PingData ping = {
@@ -467,3 +482,5 @@ main(int argc, const char* const* argv) {
 
     close(ping.fd);
 }
+
+// todo ip error dump
