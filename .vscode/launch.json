@@ -10,7 +10,7 @@
             "name": "Debug",
             "program": "${workspaceFolder}/ft_ping",
             "args": [
-                "-t", "2", "google.com"
+                "-t", "2000", "google.com"
             ],
             "cwd": "${workspaceFolder}"
         }

@@ -18,7 +18,6 @@
 #include <unistd.h>
 
 static i32 TTL = 115;
-// static const struct timeval TIMEOUT = { .tv_sec = 2 };
 
 static const char* progname = NULL;
 Options options = { .no_dns = true };
@@ -30,6 +29,12 @@ int_handler(int signal) {
     (void)signal;
     pingloop = 0;
     printf("\n");
+}
+
+static void
+alarm_handler(int signal) {
+    (void)signal;
+    pingloop = 0;
 }
 
 static void
@@ -45,7 +50,8 @@ usage(void) {
     print_option("-h", "print help ane exit");
     print_option("-v", "verbose output");
     print_option("-n", "no dns name resolution");
-    print_option("-t <ttl>", "define time to live");
+    print_option("-m <ttl>", "outgoing packets time to live");
+    print_option("-t <timeout>", "time in seconds before program exits");
 }
 
 static struct sockaddr_in
@@ -146,20 +152,11 @@ decode_msg(const u8* buffer, const u64 buffer_size, Packet* out, u32* ip_hdr_siz
 
 static void
 init_socket(const i32 fd) {
-    const int one = 1;
-    setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &one, sizeof(one));
-
     if (setsockopt(fd, IPPROTO_IP, IP_TTL, &TTL, sizeof(TTL)) != 0) {
         const char* err = strerror(errno);
         dprintf(STDERR_FILENO, "%s: %s\n", progname, err);
         exit(EXIT_FAILURE);
     }
-
-    // if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &TIMEOUT, sizeof(TIMEOUT)) != 0) {
-    //     const char* err = strerror(errno);
-    //     dprintf(STDERR_FILENO, "%s: %s\n", progname, err);
-    //     exit(EXIT_FAILURE);
-    // }
 }
 
 static Packet
@@ -184,6 +181,11 @@ init_packet(const pid_t pid, const u16 seq) {
 static void
 send_ping(PingData* ping) {
     const pid_t pid = getpid();
+
+    if (options.timeout) {
+        alarm(options.timeout_value);
+        signal(SIGALRM, alarm_handler);
+    }
 
     init_socket(ping->fd);
 
@@ -344,46 +346,61 @@ parse_options(const i32 argc, const char* const* argv) {
 
     for (i32 i = 1; i < argc; i++) {
         if (argv[i][0] == '-') {
-            for (i32 j = 1; argv[i][j]; j++) {
-                switch (argv[i][j]) {
-                    case 'v':
-                        out.verbose = true;
-                        break;
-                    case 'h':
-                        out.help = true;
-                        break;
-                    case 'n':
-                        out.no_dns = true;
-                        break;
-                    case 't': {
-                        out.ttl = true;
-                        out.ttl_value = -1;
-                        if (argv[i][j + 1]) {
-                            out.ttl_value = atoi(&argv[i][j + 1]);
-                            if (out.ttl_value == -1) {
-                                invalid_argument(&argv[i][j + 1]);
-                                exit(EXIT_FAILURE);
-                            }
-                            goto next;
-                        } else if (i + 1 != argc) {
-                            out.ttl_value = atoi(argv[i + 1]);
-                            if (out.ttl_value == -1) {
-                                invalid_argument(argv[i + 1]);
-                                exit(EXIT_FAILURE);
-                            }
-                            next_arg = true;
-                            goto next;
-                        } else {
-                            usage();
-                            exit(EXIT_FAILURE);
-                        }
-                        break;
-                    }
-                    default:
-                        dprintf(STDERR_FILENO, "%s: invalid flag: '%c'\n", progname, argv[i][j]);
+            if (argv[i][1] == 0 || argv[i][2] != 0) {
+                invalid_argument(argv[i]);
+                exit(EXIT_FAILURE);
+            }
+
+            switch (argv[i][1]) {
+                case 'v':
+                    out.verbose = true;
+                    break;
+                case 'h':
+                    out.help = true;
+                    break;
+                case 'n':
+                    out.no_dns = true;
+                    break;
+                case 'm': {
+                    out.ttl = true;
+                    out.ttl_value = -1;
+
+                    if (i + 1 >= argc) {
+                        usage();
                         exit(EXIT_FAILURE);
-                        break;
-                }
+                    }
+
+                    out.ttl_value = atoi(argv[i + 1]);
+                    if (out.ttl_value == -1) {
+                        invalid_argument(argv[i + 1]);
+                        exit(EXIT_FAILURE);
+                    }
+
+                    next_arg = true;
+                    goto next;
+                } break;
+                case 't': {
+                    out.timeout = true;
+                    out.timeout_value = -1;
+
+                    if (i + 1 >= argc) {
+                        usage();
+                        exit(EXIT_FAILURE);
+                    }
+
+                    out.timeout_value = atoi(argv[i + 1]);
+                    if (out.timeout_value == -1) {
+                        invalid_argument(argv[i + 1]);
+                        exit(EXIT_FAILURE);
+                    }
+
+                    next_arg = true;
+                    goto next;
+                } break;
+                default:
+                    dprintf(STDERR_FILENO, "%s: invalid flag: '%s'\n", progname, argv[i]);
+                    exit(EXIT_FAILURE);
+                    break;
             }
         } else if (out.dst != NULL) {
             usage();
@@ -432,7 +449,7 @@ main(int argc, const char* const* argv) {
     inet_ntop(AF_INET, &ping.addr.sin_addr.s_addr, ping.ip, INET_ADDRSTRLEN);
     dns_lookup(ping.addr, ping.host, sizeof(ping.host));
 
-    ping.fd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
+    ping.fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP);
 
     if (ping.fd < 0) {
         if (!is_root && (errno == EPERM || errno == EACCES)) {

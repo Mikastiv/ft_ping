@@ -43,5 +43,9 @@ typedef struct {
     bool verbose;
     bool no_dns;
     bool ttl;
+    bool timeout;
+    bool waittime;
     i32 ttl_value;
+    i32 timeout_value;
+    i32 waittime_value;
 } Options;
