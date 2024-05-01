@@ -449,7 +449,7 @@ main(int argc, const char* const* argv) {
     inet_ntop(AF_INET, &ping.addr.sin_addr.s_addr, ping.ip, INET_ADDRSTRLEN);
     dns_lookup(ping.addr, ping.host, sizeof(ping.host));
 
-    ping.fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP);
+    ping.fd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
 
     if (ping.fd < 0) {
         if (!is_root && (errno == EPERM || errno == EACCES)) {
