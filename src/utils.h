@@ -8,7 +8,7 @@
 struct timeval
 time_diff(struct timeval a, struct timeval b);
 
-double
+f64
 to_ms(struct timeval t);
 
 bool

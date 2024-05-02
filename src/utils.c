@@ -14,10 +14,10 @@ time_diff(struct timeval a, struct timeval b) {
     return out;
 }
 
-double
+f64
 to_ms(struct timeval t) {
     const u64 us = t.tv_usec + t.tv_sec * 1000000;
-    const double out = us;
+    const f64 out = us;
     return out / 1000.0f;
 }
 

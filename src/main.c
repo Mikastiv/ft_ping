@@ -16,6 +16,7 @@
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
+#include <float.h>
 
 static const char* progname = NULL;
 Options options = { .no_dns = true };
@@ -235,6 +236,8 @@ send_ping(PingData* ping) {
     u16 pkt_transmitted = 0;
     u16 pkt_received = 0;
     i32 last_received = -1;
+    f64 min_rtt = FLT_MAX;
+    f64 max_rtt = FLT_MIN;
 
     while (pingloop) {
         Packet pkt = init_packet(pid, msg_count++);
@@ -351,7 +354,9 @@ send_ping(PingData* ping) {
             pkt_received++;
         }
 
-        const double time = to_ms(time_diff(end, start));
+        const f64 time = to_ms(time_diff(end, start));
+        if (time > max_rtt) max_rtt = time;
+        if (time < min_rtt) min_rtt = time;
 
         printf("%lu bytes from ", bytes - (ip->ip_hl << 2));
 
@@ -364,7 +369,7 @@ send_ping(PingData* ping) {
         if (is_duplicate) {
             printf("duplicate packet %u\n", packet_seq);
         } else {
-            printf("icmp_seq=%u ttl=%u time=%.2lf ms\n", packet_seq, ip->ip_ttl, time);
+            printf("icmp_seq=%u ttl=%u time=%.3lf ms\n", packet_seq, ip->ip_ttl, time);
         }
 
     next_ping:
@@ -378,6 +383,7 @@ send_ping(PingData* ping) {
         pkt_received,
         (u16)((float)(pkt_transmitted - pkt_received) / pkt_transmitted * 100.0)
     );
+    printf("round-trip min/avg/max/stddev = %.3f/%.3f/%.3f/%.3f ms\n", min_rtt, 0.0, max_rtt, 0.0);
 }
 
 static void
@@ -531,4 +537,4 @@ main(int argc, const char* const* argv) {
     close(ping.fd);
 }
 
-// todo ip error dump
+// todo rtt
