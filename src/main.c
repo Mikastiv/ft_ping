@@ -179,6 +179,42 @@ init_packet(const pid_t pid, const u16 seq) {
 }
 
 static void
+dump_ip_hdr(struct ip* ip, struct sockaddr_in* dst) {
+    u32 hlen = ip->ip_hl << 2;
+    u8* cp = (unsigned char*)ip + sizeof(*ip);
+    u32 j;
+
+    printf("IP Hdr Dump:\n ");
+    for (j = 0; j < sizeof(*ip); ++j)
+        printf("%02x%s", *((unsigned char*)ip + j), (j % 2) ? " " : "");
+    printf("\n");
+
+    printf("Vr HL TOS  Len   ID Flg  off TTL Pro  cks      Src\tDst\tData\n");
+    printf(" %1x  %1x  %02x", ip->ip_v, ip->ip_hl, ip->ip_tos);
+    printf(" %04x %04x", (ip->ip_len > 0x2000) ? ntohs(ip->ip_len) : ip->ip_len, ntohs(ip->ip_id));
+    printf("   %1x %04x", (ntohs(ip->ip_off) & 0xe000) >> 13, ntohs(ip->ip_off) & 0x1fff);
+    printf("  %02x  %02x %04x", ip->ip_ttl, ip->ip_p, ntohs(ip->ip_sum));
+    printf(" %s ", inet_ntoa(*((struct in_addr*)&ip->ip_src)));
+    printf(" %s ", inet_ntoa(*((struct in_addr*)&dst->sin_addr.s_addr)));
+    while (hlen-- > sizeof(*ip)) printf("%02x", *cp++);
+
+    printf("\n");
+}
+
+static void
+dump_packet(struct ip* ip, IcmpEchoHeader hdr, struct sockaddr_in* dst) {
+    dump_ip_hdr(ip, dst);
+    printf(
+        "ICMP: type %d, code %d, size %u, id 0x%04x, seq 0x%04x\n",
+        hdr.type,
+        hdr.code,
+        ntohs(ip->ip_len) - (ip->ip_hl << 2),
+        hdr.id,
+        ntohs(hdr.seq)
+    );
+}
+
+static void
 send_ping(PingData* ping) {
     const pid_t pid = getpid();
 
@@ -272,6 +308,10 @@ send_ping(PingData* ping) {
         if (!receive_success) {
             switch (r_pkt.header.type) {
                 case Icmp_TimeExceeded:
+                    if (options.verbose) {
+                        dump_packet(ip, pkt.header, (struct sockaddr_in*)&ping->addr);
+                    }
+
                     printf("%lu bytes from ", bytes - (ip->ip_hl << 2));
                     if (!options.no_dns && dns_lookup_success) {
                         printf("%s (%s): ", addrname, src_ip);
@@ -281,6 +321,10 @@ send_ping(PingData* ping) {
                     printf("Time to live exceeded\n");
                     break;
                 case Icmp_EchoReply:
+                    if (options.verbose) {
+                        dump_packet(ip, pkt.header, (struct sockaddr_in*)&ping->addr);
+                    }
+
                     printf("checksum mismatch\n");
                     break;
                 case Icmp_EchoRequest:
@@ -289,6 +333,10 @@ send_ping(PingData* ping) {
                     continue;
                     break;
                 default:
+                    if (options.verbose) {
+                        dump_packet(ip, pkt.header, (struct sockaddr_in*)&ping->addr);
+                    }
+
                     printf("unknown error\n");
                     break;
             }
@@ -380,12 +428,12 @@ parse_options(const i32 argc, const char* const* argv) {
                         exit(EXIT_FAILURE);
                     }
 
-                    if (out.timeout_value <= 0 || out.ttl_value > 255) {
+                    if (out.ttl_value <= 0 || out.ttl_value > 255) {
                         dprintf(
                             STDERR_FILENO,
                             "%s: invalid ttl value: '%d'\n",
                             progname,
-                            out.timeout_value
+                            out.ttl_value
                         );
                         exit(EXIT_FAILURE);
                     }
