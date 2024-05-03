@@ -264,6 +264,9 @@ send_ping(PingData* ping) {
     f64 sum_rtt = 0.0;
     f64 sumsq_rtt = 0.0;
 
+    u64 pkt_duplicate = 0;
+    u8 bits_duplicate[128] = { 0 };
+
     while (pingloop) {
         Packet pkt = init_packet(pid, msg_count++);
 
@@ -381,8 +384,18 @@ send_ping(PingData* ping) {
         }
 
         const u16 packet_seq = ntohs(r_pkt.header.seq);
-
-        pkt_received++;
+        const u64 bit_index =
+            (packet_seq / 8) % (sizeof(bits_duplicate) / sizeof(bits_duplicate[0]));
+        const u64 bit_mask = 1 << (packet_seq % 8);
+        bool is_dup;
+        if (bits_duplicate[bit_index] & bit_mask) {
+            pkt_duplicate++;
+            is_dup = true;
+        } else {
+            pkt_received++;
+            is_dup = false;
+        }
+        bits_duplicate[bit_index] |= bit_mask;
 
         const f64 time = to_ms(time_diff(end, start));
         sum_rtt += time;
@@ -398,7 +411,11 @@ send_ping(PingData* ping) {
             printf("%s: ", src_ip);
         }
 
-        printf("icmp_seq=%u ttl=%u time=%.3lf ms\n", packet_seq, ip->ip_ttl, time);
+        printf("icmp_seq=%u ttl=%u time=%.3lf ms", packet_seq, ip->ip_ttl, time);
+        if (is_dup) {
+            printf(" (DUP!)");
+        }
+        printf("\n");
 
     next_ping:
         usleep(1000 * 1000);
@@ -413,7 +430,7 @@ send_ping(PingData* ping) {
     );
 
     if (pkt_received > 0) {
-        const f64 total = pkt_received;
+        const f64 total = pkt_received + pkt_duplicate;
         const f64 avg = sum_rtt / total;
         const f64 variation = sumsq_rtt / total - avg * avg;
         printf(
