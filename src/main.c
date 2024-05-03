@@ -4,6 +4,8 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <float.h>
+#include <math.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
@@ -16,7 +18,6 @@
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
-#include <float.h>
 
 static const char* progname = NULL;
 Options options = { .no_dns = true };
@@ -235,9 +236,11 @@ send_ping(PingData* ping) {
     u16 msg_count = 0;
     u16 pkt_transmitted = 0;
     u16 pkt_received = 0;
-    i32 last_received = -1;
     f64 min_rtt = FLT_MAX;
     f64 max_rtt = FLT_MIN;
+    f64 sum_rtt = 0.0;
+    f64 sumsq_rtt = 0.0;
+    bool skip_rtt = false;
 
     while (pingloop) {
         Packet pkt = init_packet(pid, msg_count++);
@@ -311,6 +314,8 @@ send_ping(PingData* ping) {
         if (!receive_success) {
             switch (r_pkt.header.type) {
                 case Icmp_TimeExceeded:
+                    skip_rtt = true;
+
                     if (options.verbose) {
                         dump_packet(ip, pkt.header, (struct sockaddr_in*)&ping->addr);
                     }
@@ -336,6 +341,7 @@ send_ping(PingData* ping) {
                     continue;
                     break;
                 default:
+                    skip_rtt = true;
                     if (options.verbose) {
                         dump_packet(ip, pkt.header, (struct sockaddr_in*)&ping->addr);
                     }
@@ -348,13 +354,12 @@ send_ping(PingData* ping) {
         }
 
         const u16 packet_seq = ntohs(r_pkt.header.seq);
-        const bool is_duplicate = (i32)packet_seq <= last_received;
 
-        if (!is_duplicate) {
-            pkt_received++;
-        }
+        pkt_received++;
 
         const f64 time = to_ms(time_diff(end, start));
+        sum_rtt += time;
+        sumsq_rtt += time * time;
         if (time > max_rtt) max_rtt = time;
         if (time < min_rtt) min_rtt = time;
 
@@ -366,11 +371,7 @@ send_ping(PingData* ping) {
             printf("%s: ", src_ip);
         }
 
-        if (is_duplicate) {
-            printf("duplicate packet %u\n", packet_seq);
-        } else {
-            printf("icmp_seq=%u ttl=%u time=%.3lf ms\n", packet_seq, ip->ip_ttl, time);
-        }
+        printf("icmp_seq=%u ttl=%u time=%.3lf ms\n", packet_seq, ip->ip_ttl, time);
 
     next_ping:
         usleep(1000 * 1000);
@@ -383,7 +384,19 @@ send_ping(PingData* ping) {
         pkt_received,
         (u16)((float)(pkt_transmitted - pkt_received) / pkt_transmitted * 100.0)
     );
-    printf("round-trip min/avg/max/stddev = %.3f/%.3f/%.3f/%.3f ms\n", min_rtt, 0.0, max_rtt, 0.0);
+
+    if (!skip_rtt) {
+        const f64 total = pkt_received;
+        const f64 avg = sum_rtt / total;
+        const f64 variation = sumsq_rtt / total - avg * avg;
+        printf(
+            "round-trip min/avg/max/stddev = %.3f/%.3f/%.3f/%.3f ms\n",
+            min_rtt,
+            avg,
+            max_rtt,
+            sqrt(variation)
+        );
+    }
 }
 
 static void
@@ -429,11 +442,6 @@ parse_options(const i32 argc, const char* const* argv) {
                     }
 
                     out.ttl_value = atoi(argv[i + 1]);
-                    if (out.ttl_value < 0) {
-                        invalid_argument(argv[i + 1]);
-                        exit(EXIT_FAILURE);
-                    }
-
                     if (out.ttl_value <= 0 || out.ttl_value > 255) {
                         dprintf(
                             STDERR_FILENO,
@@ -536,5 +544,3 @@ main(int argc, const char* const* argv) {
 
     close(ping.fd);
 }
-
-// todo rtt

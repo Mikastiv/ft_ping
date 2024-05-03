@@ -20,7 +20,7 @@ run: all
 	@./$(NAME) google.com
 
 $(NAME): $(OBJDIR) $(OBJ)
-	$(CC) $(OBJ) -o $(NAME)
+	$(CC) $(OBJ) -lm -o $(NAME)
 
 $(OBJDIR):
 	mkdir -p $(OBJDIR)
