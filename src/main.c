@@ -591,7 +591,6 @@ main(int argc, const char* const* argv) {
         .dst = options.dst,
     };
 
-    ping.is_ip_format = is_ipv4(ping.dst);
     ping.addr = lookup_addr(ping.dst);
     inet_ntop(AF_INET, &ping.addr.sin_addr.s_addr, ping.ip, INET_ADDRSTRLEN);
     dns_lookup(ping.addr, ping.host, sizeof(ping.host));

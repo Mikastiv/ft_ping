@@ -30,22 +30,3 @@ bool
 is_space(const char c) {
     return (c >= '\t' && c <= '\r') || c == ' ';
 }
-
-bool
-is_ipv4(const char* str) {
-    u32 dots = 0;
-    for (u32 i = 0; str[i]; i++) {
-        if (!is_digit(str[i]) && str[i] != '.') {
-            return false;
-        }
-        if (str[i] == '.') {
-            dots += 1;
-        }
-    }
-
-    if (dots > 3) {
-        return false;
-    }
-
-    return true;
-}

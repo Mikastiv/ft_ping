@@ -16,6 +16,3 @@ is_digit(const char c);
 
 bool
 is_space(const char c);
-
-bool
-is_ipv4(const char* str);

@@ -34,7 +34,6 @@ typedef struct {
     char ip[INET_ADDRSTRLEN];
     char host[NI_MAXHOST];
     struct sockaddr_in addr;
-    bool is_ip_format;
 } PingData;
 
 typedef struct {
