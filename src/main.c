@@ -23,7 +23,6 @@
 
 static const char* progname = NULL;
 Options options = { .no_dns = true };
-const u32 WAITTIME = 1;
 
 static volatile sig_atomic_t pingloop = 1;
 
@@ -48,13 +47,14 @@ print_option(const char* name, const char* desc) {
 static void
 usage(void) {
     dprintf(STDERR_FILENO, "usage: %s [options] <destination>\n\n", progname);
-    dprintf(STDERR_FILENO, "options: \n");
     print_option("<destination>", "dns name or ip address");
+    dprintf(STDERR_FILENO, "options: \n");
     print_option("-h", "print help ane exit");
     print_option("-v", "verbose output");
     print_option("-n", "no dns name resolution");
     print_option("-m <ttl>", "outgoing packets time to live");
     print_option("-t <timeout>", "time in seconds before program exits");
+    print_option("-W <waittime>", "time in seconds to wait for a packet");
 }
 
 static struct sockaddr_in
@@ -153,7 +153,7 @@ decode_msg(const u8* buffer, const u64 buffer_size, Packet* out, struct ip** ip)
 }
 
 static void
-init_socket(const i32 fd) {
+init_socket(const i32 fd, const i32 waittime) {
     if (options.ttl) {
         const i32 ttl = options.ttl_value;
         if (setsockopt(fd, IPPROTO_IP, IP_TTL, &ttl, sizeof(ttl)) != 0) {
@@ -163,8 +163,8 @@ init_socket(const i32 fd) {
         }
     }
 
-    const struct timeval waittime = { .tv_sec = WAITTIME };
-    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &waittime, sizeof(waittime)) != 0) {
+    const struct timeval tv = { .tv_sec = waittime };
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) != 0) {
         const char* err = strerror(errno);
         dprintf(STDERR_FILENO, "%s: %s\n", progname, err);
         exit(EXIT_FAILURE);
@@ -248,7 +248,7 @@ send_ping(PingData* ping) {
         signal(SIGALRM, alarm_handler);
     }
 
-    init_socket(ping->fd);
+    init_socket(ping->fd, options.waittime_value);
 
     printf("PING %s (%s) %lu data bytes", ping->dst, ping->ip, sizeof(Packet) - MIN_ICMPSIZE);
     if (options.verbose) {
@@ -279,7 +279,7 @@ send_ping(PingData* ping) {
             sizeof(struct sockaddr)
         );
 
-        if (ping_timeout(start, WAITTIME) || !pingloop) {
+        if (ping_timeout(start, options.waittime_value) || !pingloop) {
             continue;
         }
 
@@ -314,7 +314,7 @@ send_ping(PingData* ping) {
         struct timeval end;
         gettimeofday(&end, NULL);
 
-        if (ping_timeout(start, WAITTIME) || !pingloop) {
+        if (ping_timeout(start, options.waittime_value) || !pingloop) {
             continue;
         }
 
@@ -505,6 +505,28 @@ parse_options(const i32 argc, const char* const* argv) {
                     next_arg = true;
                     goto next;
                 } break;
+                case 'W': {
+                    out.waittime_value = -1;
+
+                    if (i + 1 >= argc) {
+                        usage();
+                        exit(EXIT_FAILURE);
+                    }
+
+                    out.waittime_value = atoi(argv[i + 1]);
+                    if (out.waittime_value <= 0) {
+                        dprintf(
+                            STDERR_FILENO,
+                            "%s: invalid wait time value: '%d'\n",
+                            progname,
+                            out.waittime_value
+                        );
+                        exit(EXIT_FAILURE);
+                    }
+
+                    next_arg = true;
+                    goto next;
+                } break;
                 default:
                     dprintf(STDERR_FILENO, "%s: invalid flag: '%s'\n", progname, argv[i]);
                     exit(EXIT_FAILURE);
@@ -543,6 +565,10 @@ main(int argc, const char* const* argv) {
     }
 
     const bool is_root = getuid() == 0;
+
+    if (options.waittime_value == 0) {
+        options.waittime_value = 5;
+    }
 
     PingData ping = {
         .dst = options.dst,
