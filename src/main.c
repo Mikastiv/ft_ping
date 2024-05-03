@@ -3,6 +3,8 @@
 #include "utils.h"
 
 #include <arpa/inet.h>
+#include <asm-generic/socket.h>
+#include <bits/types/struct_timeval.h>
 #include <errno.h>
 #include <float.h>
 #include <math.h>
@@ -21,6 +23,7 @@
 
 static const char* progname = NULL;
 Options options = { .no_dns = true };
+const u32 WAITTIME = 1;
 
 static volatile sig_atomic_t pingloop = 1;
 
@@ -159,6 +162,13 @@ init_socket(const i32 fd) {
             exit(EXIT_FAILURE);
         }
     }
+
+    const struct timeval waittime = { .tv_sec = WAITTIME };
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &waittime, sizeof(waittime)) != 0) {
+        const char* err = strerror(errno);
+        dprintf(STDERR_FILENO, "%s: %s\n", progname, err);
+        exit(EXIT_FAILURE);
+    }
 }
 
 static Packet
@@ -216,6 +226,19 @@ dump_packet(struct ip* ip, IcmpEchoHeader hdr, struct sockaddr_in* dst) {
     );
 }
 
+static bool
+ping_timeout(struct timeval starttime, const u32 waittime) {
+    struct timeval now;
+    gettimeofday(&now, NULL);
+
+    struct timeval diff = time_diff(now, starttime);
+    if (diff.tv_sec >= waittime) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
 static void
 send_ping(PingData* ping) {
     const pid_t pid = getpid();
@@ -240,7 +263,6 @@ send_ping(PingData* ping) {
     f64 max_rtt = FLT_MIN;
     f64 sum_rtt = 0.0;
     f64 sumsq_rtt = 0.0;
-    bool skip_rtt = false;
 
     while (pingloop) {
         Packet pkt = init_packet(pid, msg_count++);
@@ -256,6 +278,10 @@ send_ping(PingData* ping) {
             (struct sockaddr*)&ping->addr,
             sizeof(struct sockaddr)
         );
+
+        if (ping_timeout(start, WAITTIME) || !pingloop) {
+            continue;
+        }
 
         if (res == 0) {
             dprintf(STDERR_FILENO, "%s: socket closed\n", progname);
@@ -288,6 +314,10 @@ send_ping(PingData* ping) {
         struct timeval end;
         gettimeofday(&end, NULL);
 
+        if (ping_timeout(start, WAITTIME) || !pingloop) {
+            continue;
+        }
+
         if (bytes == 0) {
             dprintf(STDERR_FILENO, "%s: socket closed\n", progname);
             exit(EXIT_FAILURE);
@@ -314,8 +344,6 @@ send_ping(PingData* ping) {
         if (!receive_success) {
             switch (r_pkt.header.type) {
                 case Icmp_TimeExceeded:
-                    skip_rtt = true;
-
                     if (options.verbose) {
                         dump_packet(ip, pkt.header, (struct sockaddr_in*)&ping->addr);
                     }
@@ -341,7 +369,6 @@ send_ping(PingData* ping) {
                     continue;
                     break;
                 default:
-                    skip_rtt = true;
                     if (options.verbose) {
                         dump_packet(ip, pkt.header, (struct sockaddr_in*)&ping->addr);
                     }
@@ -385,7 +412,7 @@ send_ping(PingData* ping) {
         (u16)((float)(pkt_transmitted - pkt_received) / pkt_transmitted * 100.0)
     );
 
-    if (!skip_rtt) {
+    if (pkt_received > 0) {
         const f64 total = pkt_received;
         const f64 avg = sum_rtt / total;
         const f64 variation = sumsq_rtt / total - avg * avg;
