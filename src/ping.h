@@ -49,7 +49,6 @@ typedef struct {
 } Options;
 
 typedef struct {
-    const char* dst;
     u32 pkt_transmitted;
     u32 pkt_received;
     u32 pkt_duplicate;
