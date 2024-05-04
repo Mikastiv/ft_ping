@@ -54,7 +54,7 @@ usage(void) {
     dprintf(STDERR_FILENO, "usage: %s [options] <destination>\n\n", progname);
     print_option("<destination>", "dns name or ip address");
     dprintf(STDERR_FILENO, "options: \n");
-    print_option("-h", "print help ane exit");
+    print_option("-h", "print help and exit");
     print_option("-v", "verbose output");
     print_option("-n", "no dns name resolution");
     print_option("-m <ttl>", "outgoing packets time to live");
