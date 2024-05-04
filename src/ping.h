@@ -47,3 +47,14 @@ typedef struct {
     i32 timeout_value;
     i32 waittime_value;
 } Options;
+
+typedef struct {
+    const char* dst;
+    u32 pkt_transmitted;
+    u32 pkt_received;
+    u32 pkt_duplicate;
+    f64 sum_rtt;
+    f64 sumsq_rtt;
+    f64 min_rtt;
+    f64 max_rtt;
+} Stats;

@@ -22,21 +22,26 @@
 #include <unistd.h>
 
 static const char* progname = NULL;
+PingData global_ping = { 0 };
 Options options = { .no_dns = true };
+Stats stats = { .min_rtt = FLT_MAX };
 
-static volatile sig_atomic_t pingloop = 1;
+static void
+print_stats(void);
 
 static void
 int_handler(int signal) {
     (void)signal;
-    pingloop = 0;
     printf("\n");
+    print_stats();
+    exit(EXIT_SUCCESS);
 }
 
 static void
 alarm_handler(int signal) {
     (void)signal;
-    pingloop = 0;
+    print_stats();
+    exit(EXIT_SUCCESS);
 }
 
 static void
@@ -240,6 +245,30 @@ ping_timeout(struct timeval starttime, const u32 waittime) {
 }
 
 static void
+print_stats(void) {
+    printf("--- %s ping statistics ---\n", global_ping.dst);
+    printf(
+        "%u packets transmitted, %u received, %u%% packet loss\n",
+        stats.pkt_transmitted,
+        stats.pkt_received,
+        (u32)((float)(stats.pkt_transmitted - stats.pkt_received) / stats.pkt_transmitted * 100.0)
+    );
+
+    if (stats.pkt_received > 0) {
+        const f64 total = stats.pkt_received + stats.pkt_duplicate;
+        const f64 avg = stats.sum_rtt / total;
+        const f64 variation = stats.sumsq_rtt / total - avg * avg;
+        printf(
+            "round-trip min/avg/max/stddev = %.3f/%.3f/%.3f/%.3f ms\n",
+            stats.min_rtt,
+            avg,
+            stats.max_rtt,
+            sqrt(variation)
+        );
+    }
+}
+
+static void
 send_ping(PingData* ping) {
     const pid_t pid = getpid();
 
@@ -257,17 +286,11 @@ send_ping(PingData* ping) {
     printf("\n");
 
     u16 msg_count = 0;
-    u16 pkt_transmitted = 0;
-    u16 pkt_received = 0;
-    f64 min_rtt = FLT_MAX;
-    f64 max_rtt = FLT_MIN;
-    f64 sum_rtt = 0.0;
-    f64 sumsq_rtt = 0.0;
 
     u64 pkt_duplicate = 0;
     u8 bits_duplicate[128] = { 0 };
 
-    while (pingloop) {
+    while (true) {
         Packet pkt = init_packet(pid, msg_count++);
 
         struct timeval start;
@@ -282,9 +305,7 @@ send_ping(PingData* ping) {
             sizeof(struct sockaddr)
         );
 
-        if (ping_timeout(start, options.waittime_value) || !pingloop) {
-            continue;
-        }
+        if (ping_timeout(start, options.waittime_value)) continue;
 
         if (res == 0) {
             dprintf(STDERR_FILENO, "%s: socket closed\n", progname);
@@ -297,7 +318,7 @@ send_ping(PingData* ping) {
             exit(EXIT_FAILURE);
         }
 
-        pkt_transmitted++;
+        stats.pkt_transmitted++;
 
         u8 buffer[256];
         struct iovec iov = {
@@ -317,9 +338,7 @@ send_ping(PingData* ping) {
         struct timeval end;
         gettimeofday(&end, NULL);
 
-        if (ping_timeout(start, options.waittime_value) || !pingloop) {
-            continue;
-        }
+        if (ping_timeout(start, options.waittime_value)) continue;
 
         if (bytes == 0) {
             dprintf(STDERR_FILENO, "%s: socket closed\n", progname);
@@ -368,9 +387,8 @@ send_ping(PingData* ping) {
                     break;
                 case Icmp_EchoRequest:
                     // from localhost
-                    pkt_transmitted--;
+                    stats.pkt_transmitted--;
                     continue;
-                    break;
                 default:
                     if (options.verbose) {
                         dump_packet(ip, pkt.header, (struct sockaddr_in*)&ping->addr);
@@ -384,24 +402,24 @@ send_ping(PingData* ping) {
         }
 
         const u16 packet_seq = ntohs(r_pkt.header.seq);
-        const u64 bit_index =
-            (packet_seq / 8) % (sizeof(bits_duplicate) / sizeof(bits_duplicate[0]));
+        const u64 bit_index = (packet_seq / 8) % sizeof(bits_duplicate);
         const u64 bit_mask = 1 << (packet_seq % 8);
+
         bool is_dup;
         if (bits_duplicate[bit_index] & bit_mask) {
             pkt_duplicate++;
             is_dup = true;
         } else {
-            pkt_received++;
+            stats.pkt_received++;
             is_dup = false;
         }
         bits_duplicate[bit_index] |= bit_mask;
 
         const f64 time = to_ms(time_diff(end, start));
-        sum_rtt += time;
-        sumsq_rtt += time * time;
-        if (time > max_rtt) max_rtt = time;
-        if (time < min_rtt) min_rtt = time;
+        stats.sum_rtt += time;
+        stats.sumsq_rtt += time * time;
+        if (time > stats.max_rtt) stats.max_rtt = time;
+        if (time < stats.min_rtt) stats.min_rtt = time;
 
         printf("%lu bytes from ", bytes - (ip->ip_hl << 2));
 
@@ -421,31 +439,46 @@ send_ping(PingData* ping) {
         usleep(1000 * 1000);
     }
 
-    printf("--- %s ping statistics ---\n", ping->dst);
-    printf(
-        "%u packets transmitted, %u received, %u%% packet loss\n",
-        pkt_transmitted,
-        pkt_received,
-        (u16)((float)(pkt_transmitted - pkt_received) / pkt_transmitted * 100.0)
-    );
-
-    if (pkt_received > 0) {
-        const f64 total = pkt_received + pkt_duplicate;
-        const f64 avg = sum_rtt / total;
-        const f64 variation = sumsq_rtt / total - avg * avg;
-        printf(
-            "round-trip min/avg/max/stddev = %.3f/%.3f/%.3f/%.3f ms\n",
-            min_rtt,
-            avg,
-            max_rtt,
-            sqrt(variation)
-        );
-    }
+    print_stats();
 }
 
 static void
 invalid_argument(const char* arg) {
     dprintf(STDERR_FILENO, "%s: invalid argument: '%s'\n", progname, arg);
+}
+
+static bool
+is_valid_ttl(const i32 value) {
+    return value > 0 && value < 256;
+}
+
+static bool
+is_greater_than_zero(const i32 value) {
+    return value > 0;
+}
+
+static i32
+get_flag_value(
+    const i32 argc,
+    const char* const* argv,
+    const i32 index,
+    const char* name,
+    bool (*is_valid)(const i32)
+) {
+    i32 result = -1;
+
+    if (index + 1 >= argc) {
+        usage();
+        exit(EXIT_FAILURE);
+    }
+
+    result = atoi(argv[index + 1]);
+    if (!is_valid(result)) {
+        dprintf(STDERR_FILENO, "%s: invalid %s value: '%d'\n", progname, name, result);
+        exit(EXIT_FAILURE);
+    }
+
+    return result;
 }
 
 static Options
@@ -478,69 +511,20 @@ parse_options(const i32 argc, const char* const* argv) {
                     break;
                 case 'm': {
                     out.ttl = true;
-                    out.ttl_value = -1;
-
-                    if (i + 1 >= argc) {
-                        usage();
-                        exit(EXIT_FAILURE);
-                    }
-
-                    out.ttl_value = atoi(argv[i + 1]);
-                    if (out.ttl_value <= 0 || out.ttl_value > 255) {
-                        dprintf(
-                            STDERR_FILENO,
-                            "%s: invalid ttl value: '%d'\n",
-                            progname,
-                            out.ttl_value
-                        );
-                        exit(EXIT_FAILURE);
-                    }
-
+                    out.ttl_value = get_flag_value(argc, argv, i, "ttl", &is_valid_ttl);
                     next_arg = true;
                     goto next;
                 } break;
                 case 't': {
                     out.timeout = true;
-                    out.timeout_value = -1;
-
-                    if (i + 1 >= argc) {
-                        usage();
-                        exit(EXIT_FAILURE);
-                    }
-
-                    out.timeout_value = atoi(argv[i + 1]);
-                    if (out.timeout_value <= 0) {
-                        dprintf(
-                            STDERR_FILENO,
-                            "%s: invalid timeout value: '%d'\n",
-                            progname,
-                            out.timeout_value
-                        );
-                        exit(EXIT_FAILURE);
-                    }
-
+                    out.timeout_value =
+                        get_flag_value(argc, argv, i, "timeout", &is_greater_than_zero);
                     next_arg = true;
                     goto next;
                 } break;
                 case 'W': {
-                    out.waittime_value = -1;
-
-                    if (i + 1 >= argc) {
-                        usage();
-                        exit(EXIT_FAILURE);
-                    }
-
-                    out.waittime_value = atoi(argv[i + 1]);
-                    if (out.waittime_value <= 0) {
-                        dprintf(
-                            STDERR_FILENO,
-                            "%s: invalid wait time value: '%d'\n",
-                            progname,
-                            out.waittime_value
-                        );
-                        exit(EXIT_FAILURE);
-                    }
-
+                    out.waittime_value =
+                        get_flag_value(argc, argv, i, "wait time", &is_greater_than_zero);
                     next_arg = true;
                     goto next;
                 } break;
@@ -587,17 +571,14 @@ main(int argc, const char* const* argv) {
         options.waittime_value = 5;
     }
 
-    PingData ping = {
-        .dst = options.dst,
-    };
+    global_ping.dst = options.dst;
+    global_ping.addr = lookup_addr(global_ping.dst);
+    inet_ntop(AF_INET, &global_ping.addr.sin_addr.s_addr, global_ping.ip, INET_ADDRSTRLEN);
+    dns_lookup(global_ping.addr, global_ping.host, sizeof(global_ping.host));
 
-    ping.addr = lookup_addr(ping.dst);
-    inet_ntop(AF_INET, &ping.addr.sin_addr.s_addr, ping.ip, INET_ADDRSTRLEN);
-    dns_lookup(ping.addr, ping.host, sizeof(ping.host));
+    global_ping.fd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
 
-    ping.fd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
-
-    if (ping.fd < 0) {
+    if (global_ping.fd < 0) {
         if (!is_root && (errno == EPERM || errno == EACCES)) {
             dprintf(STDERR_FILENO, "%s: lacking priviledge for icmp socket\n", progname);
         } else {
@@ -609,7 +590,7 @@ main(int argc, const char* const* argv) {
 
     signal(SIGINT, int_handler);
 
-    send_ping(&ping);
+    send_ping(&global_ping);
 
-    close(ping.fd);
+    close(global_ping.fd);
 }
