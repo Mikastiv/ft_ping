@@ -3,8 +3,6 @@
 #include "utils.h"
 
 #include <arpa/inet.h>
-#include <asm-generic/socket.h>
-#include <bits/types/struct_timeval.h>
 #include <errno.h>
 #include <float.h>
 #include <math.h>
