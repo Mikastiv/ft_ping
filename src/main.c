@@ -555,7 +555,7 @@ main(int argc, const char* const* argv) {
 
     if (options.help) {
         usage();
-        exit(EXIT_SUCCESS);
+        exit(EXIT_FAILURE);
     }
 
     if (options.dst == NULL) {
