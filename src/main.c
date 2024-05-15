@@ -503,8 +503,6 @@ parse_options(const i32 argc, const char* const* argv) {
                     break;
                 case 'h':
                     out.help = true;
-                    usage();
-                    exit(EXIT_FAILURE);
                     break;
                 case 'n':
                     out.no_dns = true;
@@ -547,11 +545,6 @@ parse_options(const i32 argc, const char* const* argv) {
         next_arg = false;
     }
 
-    if (out.dst == NULL) {
-        dprintf(STDERR_FILENO, "%s: usage error: destination address required\n", progname);
-        exit(EXIT_FAILURE);
-    }
-
     return out;
 }
 
@@ -563,6 +556,11 @@ main(int argc, const char* const* argv) {
     if (options.help) {
         usage();
         exit(EXIT_SUCCESS);
+    }
+
+    if (options.dst == NULL) {
+        dprintf(STDERR_FILENO, "%s: usage error: destination address required\n", progname);
+        exit(EXIT_FAILURE);
     }
 
     const bool is_root = getuid() == 0;
